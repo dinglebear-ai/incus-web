@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   CODEX_APP_SERVER_NOT_CONFIGURED,
+  createAgentRun,
   createAgentRunStore,
   dispatchAgentRun,
+  executeAgentRun,
   listAgentRuns,
   startAgentController,
 } from "../../../../scripts/agent-runs.mjs";
@@ -152,6 +154,142 @@ describe("agent run host store", () => {
       url: "ws://127.0.0.1:4500",
     });
     expect(progress).toEqual(["Codex app-server thread thr_123 running"]);
+  });
+
+  it("fails with an actionable error when the source credential is missing", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(
+      { ...command, payload: { ...command.payload, agent: "claude" } },
+      config(storePath),
+    );
+    await store.insert(run);
+
+    await expect(
+      executeAgentRun(run, {
+        config: config(storePath),
+        store,
+        incus: async () => "",
+        execInContainer: async () => "",
+        readHostCredential: async () => {
+          throw new Error("not found");
+        },
+        injectCredential: async () => {
+          throw new Error("must not be called");
+        },
+        deleteInjectedCredential: async () => {},
+      }),
+    ).rejects.toMatchObject({
+      code: "credential_not_found",
+      message: expect.stringContaining("claude login"),
+    });
+  });
+
+  it("injects the host-sourced credential and cleans it up on success", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(
+      { ...command, payload: { ...command.payload, agent: "claude" } },
+      config(storePath),
+    );
+    await store.insert(run);
+
+    const injectCalls: unknown[] = [];
+    const deleteCalls: unknown[] = [];
+    const credentialContent = JSON.stringify({ claudeAiOauth: { accessToken: "x" } });
+
+    const result = await executeAgentRun(run, {
+      config: { ...config(storePath), credentialSourceContainer: "incus-web" },
+      store,
+      incus: async () => "",
+      execInContainer: async () => "",
+      readHostCredential: async (container: string, project: string, path: string) => {
+        expect(container).toBe("incus-web");
+        expect(path).toBe("/home/agent/.claude/.credentials.json");
+        return credentialContent;
+      },
+      injectCredential: async (...args: unknown[]) => {
+        injectCalls.push(args);
+      },
+      deleteInjectedCredential: async (...args: unknown[]) => {
+        deleteCalls.push(args);
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(injectCalls).toEqual([
+      [run.container.name, run.container.project, "/root/.claude/.credentials.json", credentialContent],
+    ]);
+    expect(deleteCalls).toEqual([
+      [run.container.name, run.container.project, "/root/.claude/.credentials.json"],
+    ]);
+  });
+
+  it("still cleans up the injected credential when the agent controller fails", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(
+      { ...command, payload: { ...command.payload, agent: "claude" } },
+      config(storePath),
+    );
+    await store.insert(run);
+
+    const deleteCalls: unknown[] = [];
+    let execCount = 0;
+
+    await expect(
+      executeAgentRun(run, {
+        config: config(storePath),
+        store,
+        incus: async () => "",
+        execInContainer: async () => {
+          execCount += 1;
+          // First call is the repo clone (must succeed); second call is
+          // the claude -p invocation inside startAgentController, which
+          // this test simulates as failing.
+          if (execCount > 1) {
+            throw new Error("claude -p failed inside container");
+          }
+          return "";
+        },
+        readHostCredential: async () => JSON.stringify({ claudeAiOauth: {} }),
+        injectCredential: async () => {},
+        deleteInjectedCredential: async (...args: unknown[]) => {
+          deleteCalls.push(args);
+        },
+      }),
+    ).rejects.toThrow("claude -p failed inside container");
+
+    expect(deleteCalls).toHaveLength(1);
+  });
+
+  it("retries once on a torn/invalid JSON read before giving up", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(
+      { ...command, payload: { ...command.payload, agent: "claude" } },
+      config(storePath),
+    );
+    await store.insert(run);
+
+    let readCount = 0;
+    const credentialContent = JSON.stringify({ claudeAiOauth: { accessToken: "x" } });
+
+    const result = await executeAgentRun(run, {
+      config: config(storePath),
+      store,
+      incus: async () => "",
+      execInContainer: async () => "",
+      readHostCredential: async () => {
+        readCount += 1;
+        return readCount === 1 ? "{not valid json" : credentialContent;
+      },
+      injectCredential: async () => {},
+      deleteInjectedCredential: async () => {},
+    });
+
+    expect(readCount).toBe(2);
+    expect(result.status).toBe("succeeded");
   });
 });
 

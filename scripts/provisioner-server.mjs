@@ -188,7 +188,7 @@ function validateWorkspace(command) {
   return undefined;
 }
 
-function run(command, args, { signal } = {}) {
+function run(command, args, { signal, input } = {}) {
   return new Promise((resolve, reject) => {
     let releaseSlot;
     try {
@@ -201,8 +201,12 @@ function run(command, args, { signal } = {}) {
     let outputBytes = 0;
     const child = spawn(command, args, {
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
+    if (input !== undefined) {
+      child.stdin.write(input);
+      child.stdin.end();
+    }
     let stdout = "";
     let stderr = "";
     const finish = (err, value) => {
@@ -304,6 +308,42 @@ async function execInAgentContainer(agentRun, script, options) {
     ],
     options,
   );
+}
+
+async function readContainerFile(container, project, path, options) {
+  return agentIncus(
+    ["--project", project, "exec", container, "--", "cat", path],
+    options,
+  );
+}
+
+async function pushContainerFile(container, project, path, content, options) {
+  return agentIncus(
+    [
+      "--project",
+      project,
+      "file",
+      "push",
+      "-",
+      `${container}${path}`,
+      "--mode",
+      "0600",
+      "--create-dirs",
+    ],
+    { ...options, input: content },
+  );
+}
+
+async function deleteContainerFile(container, project, path, options) {
+  try {
+    await agentIncus(
+      ["--project", project, "file", "delete", `${container}${path}`],
+      options,
+    );
+  } catch {
+    // best-effort cleanup; a failed delete shouldn't fail an otherwise
+    // completed run, and the container is discarded/reused independently.
+  }
 }
 
 function withIncusProject(path) {
@@ -562,6 +602,12 @@ async function handleCommand(command, options) {
             incus: (args) => agentIncus(args, options),
             execInContainer: (agentRun, script) =>
               execInAgentContainer(agentRun, script, options),
+            readHostCredential: (container, project, path) =>
+              readContainerFile(container, project, path, options),
+            injectCredential: (container, project, path, content) =>
+              pushContainerFile(container, project, path, content, options),
+            deleteInjectedCredential: (container, project, path) =>
+              deleteContainerFile(container, project, path, options),
           }),
         );
       case "ListAgentRuns":

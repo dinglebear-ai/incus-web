@@ -16,6 +16,10 @@ export function agentRunConfigFromEnv(env = process.env) {
       env.INCUS_WEB_AGENT_GOLDEN_CONTAINER || "incus-web-agent-golden",
     goldenProject: env.INCUS_WEB_AGENT_GOLDEN_PROJECT || incusProject,
     runProject: env.INCUS_WEB_AGENT_RUN_PROJECT || incusProject,
+    credentialSourceContainer:
+      env.INCUS_WEB_AGENT_CREDENTIAL_SOURCE_CONTAINER || "incus-web",
+    credentialSourceProject:
+      env.INCUS_WEB_AGENT_CREDENTIAL_SOURCE_PROJECT || incusProject,
     codexAppServerUrl: env.INCUS_WEB_CODEX_APP_SERVER_URL?.trim() || "",
     codexAppServerToken: env.INCUS_WEB_CODEX_APP_SERVER_TOKEN?.trim() || "",
     codexModel: env.INCUS_WEB_CODEX_MODEL?.trim() || "",
@@ -111,7 +115,16 @@ export async function executeAgentRun(run, options) {
   const { config, store } = options;
   const execInContainer = options.execInContainer;
   const incus = options.incus;
-  if (typeof execInContainer !== "function" || typeof incus !== "function") {
+  const readHostCredential = options.readHostCredential;
+  const injectCredential = options.injectCredential;
+  const deleteInjectedCredential = options.deleteInjectedCredential;
+  if (
+    typeof execInContainer !== "function" ||
+    typeof incus !== "function" ||
+    typeof readHostCredential !== "function" ||
+    typeof injectCredential !== "function" ||
+    typeof deleteInjectedCredential !== "function"
+  ) {
     throw new Error("agent run executor is not configured");
   }
 
@@ -138,33 +151,129 @@ export async function executeAgentRun(run, options) {
   await execInContainer(run, cloneRepoScript(run));
 
   await store.update(run.id, {
-    phase: "attaching_agent",
-    lastLogExcerpt:
-      run.agent === "codex"
-        ? "Attaching Codex app-server controller"
-        : "Launching Claude CLI controller",
+    phase: "injecting_credentials",
+    lastLogExcerpt: `Injecting ${run.agent} credentials`,
   });
-  const controller = await startAgentController(run, config, execInContainer, {
-    onProgress: async (message) => {
-      await store.update(run.id, {
-        phase: "running",
-        status: "running",
-        lastLogExcerpt: message,
-      });
-    },
-  });
+  const sourcePath = sourceCredentialPathForAgent(run.agent);
+  const targetPath = targetCredentialPathForAgent(run.agent);
+  const credentialContent = await readHostCredentialWithRetry(
+    readHostCredential,
+    config.credentialSourceContainer,
+    config.credentialSourceProject,
+    sourcePath,
+  );
+  if (credentialContent === undefined) {
+    const err = new Error(missingCredentialMessage(run.agent, config));
+    err.code = "credential_not_found";
+    throw err;
+  }
+  await injectCredential(
+    run.container.name,
+    run.container.project,
+    targetPath,
+    credentialContent,
+  );
 
-  const succeeded = await store.update(run.id, {
-    phase: "succeeded",
-    status: "succeeded",
-    completedAt: new Date().toISOString(),
-    controller,
-    lastLogExcerpt:
-      run.agent === "codex"
-        ? "Codex app-server controller attached"
-        : "Claude CLI controller completed",
-  });
-  return succeeded;
+  try {
+    await store.update(run.id, {
+      phase: "attaching_agent",
+      lastLogExcerpt:
+        run.agent === "codex"
+          ? "Attaching Codex app-server controller"
+          : "Launching Claude CLI controller",
+    });
+    const controller = await startAgentController(run, config, execInContainer, {
+      onProgress: async (message) => {
+        await store.update(run.id, {
+          phase: "running",
+          status: "running",
+          lastLogExcerpt: message,
+        });
+      },
+    });
+
+    return await store.update(run.id, {
+      phase: "succeeded",
+      status: "succeeded",
+      completedAt: new Date().toISOString(),
+      controller,
+      lastLogExcerpt:
+        run.agent === "codex"
+          ? "Codex app-server controller attached"
+          : "Claude CLI controller completed",
+    });
+  } finally {
+    await deleteInjectedCredential(
+      run.container.name,
+      run.container.project,
+      targetPath,
+    );
+  }
+}
+
+// Where the real, working credential lives on the credential-source
+// container (incus-web), under its `agent` user's home.
+function sourceCredentialPathForAgent(agent) {
+  return agent === "codex"
+    ? "/home/agent/.codex/auth.json"
+    : "/home/agent/.claude/.credentials.json";
+}
+
+// Where the credential must be written inside a freshly-cloned run
+// container. `incus exec`/`execInContainer` run as root by default (no
+// --user is passed anywhere in this codebase's exec plumbing), so $HOME
+// there is /root, not /home/agent -- this must match execution context,
+// not the source container's user layout.
+function targetCredentialPathForAgent(agent) {
+  return agent === "codex"
+    ? "/root/.codex/auth.json"
+    : "/root/.claude/.credentials.json";
+}
+
+function missingCredentialMessage(agent, config) {
+  const label = agent === "codex" ? "Codex" : "Claude";
+  const cli = agent === "codex" ? "codex login" : "claude login";
+  return `${label} credential not found in ${config.credentialSourceContainer} workspace -- run '${cli}' there.`;
+}
+
+async function readHostCredentialWithRetry(
+  readHostCredential,
+  container,
+  project,
+  path,
+) {
+  let raw;
+  try {
+    raw = await readHostCredential(container, project, path);
+  } catch {
+    return undefined;
+  }
+  if (isValidJson(raw)) return raw;
+
+  // Neither Claude Code nor Codex CLI guarantee atomic writes to their
+  // credential files, so a read caught mid-write can be truncated/invalid
+  // JSON. Retry once after a short delay before giving up.
+  await sleep(75);
+  try {
+    raw = await readHostCredential(container, project, path);
+  } catch {
+    return undefined;
+  }
+  return isValidJson(raw) ? raw : undefined;
+}
+
+function isValidJson(value) {
+  if (!value) return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function startAgentController(
@@ -481,10 +590,26 @@ function copyArgsForRun(run) {
 
 function cloneRepoScript(run) {
   const checkout = run.ref ? ` && git checkout ${shellQuote(run.ref)}` : "";
+  const repoUrl = shellQuote(run.repoUrl);
+  // A freshly `incus start`-ed container's network (DHCP/DNS) is not
+  // always ready the instant the exec runs -- observed readiness delay
+  // ranges from under a second up to ~30s under host disk I/O load, so
+  // retry the clone with enough attempts/backoff to comfortably cover
+  // that range rather than failing on a startup race.
+  const cloneWithRetry = [
+    "attempts=15",
+    "for attempt in $(seq 1 $attempts); do",
+    "  rm -rf /workspace/repo",
+    `  git clone ${repoUrl} /workspace/repo && break`,
+    "  status=$?",
+    "  if [ $attempt -eq $attempts ]; then exit $status; fi",
+    "  sleep 3",
+    "done",
+  ].join("\n");
   return [
     "rm -rf /workspace/repo",
     "mkdir -p /workspace",
-    `git clone ${shellQuote(run.repoUrl)} /workspace/repo`,
+    cloneWithRetry,
     `cd /workspace/repo${checkout}`,
   ].join(" && ");
 }

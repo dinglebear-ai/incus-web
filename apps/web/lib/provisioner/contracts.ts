@@ -49,6 +49,7 @@ const AGENT_RUN_PHASES = [
   "cloning_container",
   "starting_container",
   "cloning_repo",
+  "injecting_credentials",
   "attaching_agent",
   "running",
   "succeeded",
