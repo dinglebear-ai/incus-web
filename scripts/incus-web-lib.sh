@@ -548,6 +548,27 @@ install_host_provisioner_server() {
   sudo_cmd install -d -m 755 "$install_dir"
   sudo_cmd install -m 755 "$source_file" "$INCUS_WEB_PROVISIONER_INSTALL_PATH"
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
+
+  install_host_provisioner_agent_runs_module
+}
+
+install_host_provisioner_agent_runs_module() {
+  local source_file="$INCUS_WEB_PROVISIONER_AGENT_RUNS"
+  local tmp_file=""
+  local install_dir
+
+  if [[ ! -f "$source_file" ]]; then
+    [[ "$ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD" == "1" ]] || die "host provisioner agent-runs module is missing locally; set ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1 to fetch it from INCUS_WEB_PROVISIONER_AGENT_RUNS_URL"
+    [[ "$INCUS_WEB_PROVISIONER_AGENT_RUNS_URL" == https://* ]] || die "INCUS_WEB_PROVISIONER_AGENT_RUNS_URL must use https://"
+    tmp_file="$(mktemp)"
+    curl --proto '=https' --tlsv1.2 -fsSL "$INCUS_WEB_PROVISIONER_AGENT_RUNS_URL" -o "$tmp_file"
+    source_file="$tmp_file"
+  fi
+
+  install_dir="$(dirname "$INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH")"
+  sudo_cmd install -d -m 755 "$install_dir"
+  sudo_cmd install -m 644 "$source_file" "$INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH"
+  [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 }
 
 ensure_host_provisioner_identity() {
