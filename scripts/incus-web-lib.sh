@@ -727,6 +727,8 @@ Environment=HOME=/var/lib/incus-web-provisioner
 EnvironmentFile=$INCUS_WEB_PROVISIONER_ENV_FILE
 RuntimeDirectory=incus-web
 RuntimeDirectoryMode=0750
+StateDirectory=incus-web
+StateDirectoryMode=0750
 UMask=0077
 ExecStart=$INCUS_WEB_PROVISIONER_NODE $INCUS_WEB_PROVISIONER_INSTALL_PATH
 Restart=always
