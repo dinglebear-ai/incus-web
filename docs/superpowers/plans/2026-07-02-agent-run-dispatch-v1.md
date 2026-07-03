@@ -328,3 +328,14 @@ Manual/dev smoke:
 - Secrets injection for agent CLIs needs a dedicated encrypted secret store, not env sprawl.
 - Later streaming should use SSE/WebSocket instead of polling.
 - Later cleanup should expire run containers and preserve logs/artifacts.
+
+## Addendum (2026-07-03)
+
+The golden container and credential handling described above (line 47, "Codex/Claude credentials must already be available in the golden image or injected by a later secrets system") are now implemented, differently than the "dedicated encrypted secret store" originally envisioned above:
+
+- `scripts/build-agent-golden.sh` provisions `incus-web-agent-golden` on the `labby-zfs` storage pool (not the default `dir` pool -- COW clones are near-instant, `dir` copies took 10+ minutes for this image size).
+- Credentials are NOT baked into the golden image. `scripts/agent-runs.mjs`'s `executeAgentRun` reads the owner's already-authenticated Claude/Codex credential from the `incus-web` container at dispatch time and injects it into the freshly-cloned run container via `incus file push`, then deletes it after the run completes.
+- A full encrypted secret store (per this doc's original "Open Questions") was scoped and explicitly deferred (bead `incus-web-6ai.3`) -- no evidence the primary host-sourced path fails for a reason a fallback store would fix.
+- A real operational finding from live testing: the source credential can go stale (no interactive `claude`/`codex` session refreshing it) -- `executeAgentRun` now detects an expired Claude credential proactively and fails with an actionable message rather than surfacing the CLI's generic "Not logged in" error.
+
+See PRs #11 and #12, and bead `incus-web-6ai` (children `.1`, `.2` closed; `.3` deferred).
