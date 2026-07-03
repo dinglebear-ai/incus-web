@@ -5,10 +5,40 @@ REPO_DIR="${INCUS_WEB_REPO_DIR:-/home/jmagar/workspace/incus-web}"
 BRANCH="main"
 PROVISIONER_INSTALL_PATH="${INCUS_WEB_PROVISIONER_INSTALL_PATH:-/usr/local/lib/incus-web/provisioner-server.mjs}"
 AGENT_RUNS_INSTALL_PATH="${INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH:-/usr/local/lib/incus-web/agent-runs.mjs}"
+AGENT_RUN_STORE_PATH="${INCUS_WEB_AGENT_RUN_STORE_PATH:-/var/lib/incus-web/agent-runs.json}"
 SERVICE_NAME="incus-web-provisioner.service"
+# Marks that files were synced but the restart was deferred because a run
+# was in progress. Persists across ticks so a deferred restart isn't
+# silently forgotten once cmp stops seeing a diff (files are already synced).
+PENDING_RESTART_MARKER="${INCUS_WEB_PROVISIONER_PENDING_RESTART_MARKER:-/var/lib/incus-web/.auto-redeploy-pending-restart}"
 
 log() {
   printf '[auto-redeploy] %s\n' "$*"
+}
+
+# Restarting the provisioner mid-dispatch kills the in-flight
+# executeAgentRun continuation, silently orphaning the run in the store
+# at whatever phase it was in. Check for any non-terminal run before
+# restarting; if one is active, sync files but defer the restart to the
+# next tick rather than dropping it.
+has_active_agent_run() {
+  [[ -f "$AGENT_RUN_STORE_PATH" ]] || return 1
+  AGENT_RUN_STORE_PATH="$AGENT_RUN_STORE_PATH" python3 -c '
+import json, os, sys
+
+path = os.environ["AGENT_RUN_STORE_PATH"]
+try:
+    with open(path) as f:
+        runs = json.load(f)
+except Exception:
+    sys.exit(1)
+
+terminal = {"succeeded", "failed"}
+for run in runs:
+    if run.get("status") not in terminal:
+        sys.exit(0)
+sys.exit(1)
+'
 }
 
 cd "$REPO_DIR"
@@ -49,9 +79,18 @@ if ! cmp -s scripts/agent-runs.mjs "$AGENT_RUNS_INSTALL_PATH" 2>/dev/null; then
 fi
 
 if [[ "$changed" == "1" ]]; then
-  log "restarting $SERVICE_NAME"
-  sudo systemctl restart "$SERVICE_NAME"
-  log "redeploy complete"
-else
+  sudo touch "$PENDING_RESTART_MARKER"
+fi
+
+if [[ -f "$PENDING_RESTART_MARKER" ]]; then
+  if has_active_agent_run; then
+    log "deferring restart: an agent run is currently in progress -- files synced, will retry restart next tick"
+  else
+    log "restarting $SERVICE_NAME"
+    sudo systemctl restart "$SERVICE_NAME"
+    sudo rm -f "$PENDING_RESTART_MARKER"
+    log "redeploy complete"
+  fi
+elif [[ "$changed" == "0" ]]; then
   log "no provisioner changes to deploy"
 fi

@@ -673,6 +673,8 @@ write_host_provisioner_env() {
   validate_systemd_env_value INCUS_WEB_INCUS_PROJECT "$INCUS_WEB_INCUS_PROJECT"
   validate_systemd_env_value INCUS_WEB_INCUS_CONTAINER "$INCUS_WEB_INCUS_CONTAINER"
   validate_systemd_env_value CONTAINER_NAME "$name"
+  validate_systemd_env_value INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS"
+  validate_systemd_env_value INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS"
 
   tmp_file="$(mktemp)"
   chmod 600 "$tmp_file"
@@ -684,6 +686,8 @@ write_host_provisioner_env() {
     printf 'INCUS_WEB_INCUS_PROJECT=%s\n' "$INCUS_WEB_INCUS_PROJECT"
     printf 'INCUS_WEB_INCUS_CONTAINER=%s\n' "$INCUS_WEB_INCUS_CONTAINER"
     printf 'CONTAINER_NAME=%s\n' "$name"
+    printf 'INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS"
+    printf 'INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS"
   } >"$tmp_file"
 
   sudo_cmd install -d -m 750 -g "$INCUS_WEB_PROVISIONER_GROUP" "$(dirname "$INCUS_WEB_PROVISIONER_ENV_FILE")"
