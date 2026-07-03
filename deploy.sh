@@ -72,6 +72,16 @@ main() {
   INCUS_WEB_PROVISIONER_TOKEN_FILE="${INCUS_WEB_PROVISIONER_TOKEN_FILE:-/etc/incus-web/provisioner.token}"
   INCUS_WEB_PROVISIONER_SOCKET="${INCUS_WEB_PROVISIONER_SOCKET:-/run/incus-web/provisioner.sock}"
   INCUS_WEB_PROVISIONER_SOCKET_MODE="${INCUS_WEB_PROVISIONER_SOCKET_MODE:-0660}"
+  # Per-command timeout for each individual `incus` CLI invocation the
+  # provisioner shells out to, and the overall HTTP request timeout for
+  # fully-synchronous commands. Golden-container cloning is expected to
+  # run on a COW-capable storage pool (see scripts/build-agent-golden.sh),
+  # where clones are fast but the `incus copy` CLI can still take up to a
+  # couple of minutes to report completion after the data is ready --
+  # these defaults were sized from that observed behavior, not the
+  # multi-minute-plus copies a plain `dir` storage pool would require.
+  INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS="${INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS:-180000}"
+  INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS="${INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS:-200000}"
   INCUS_WEB_PROVISIONER_USER="${INCUS_WEB_PROVISIONER_USER:-incus-web-provisioner}"
   INCUS_WEB_PROVISIONER_GROUP="${INCUS_WEB_PROVISIONER_GROUP:-incus-web}"
   INCUS_WEB_PROVISIONER_INCUS_GROUP="${INCUS_WEB_PROVISIONER_INCUS_GROUP:-incus-admin}"

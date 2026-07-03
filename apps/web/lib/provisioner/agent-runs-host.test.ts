@@ -185,6 +185,38 @@ describe("agent run host store", () => {
     });
   });
 
+  it("fails with an actionable error when the source credential is expired, without injecting it", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(
+      { ...command, payload: { ...command.payload, agent: "claude" } },
+      config(storePath),
+    );
+    await store.insert(run);
+
+    const expiredAt = Date.parse("2026-06-29T00:00:00.000Z");
+    const expiredCredential = JSON.stringify({
+      claudeAiOauth: { accessToken: "x", expiresAt: expiredAt },
+    });
+
+    await expect(
+      executeAgentRun(run, {
+        config: config(storePath),
+        store,
+        incus: async () => "",
+        execInContainer: async () => "",
+        readHostCredential: async () => expiredCredential,
+        injectCredential: async () => {
+          throw new Error("must not be called for an expired credential");
+        },
+        deleteInjectedCredential: async () => {},
+      }),
+    ).rejects.toMatchObject({
+      code: "credential_expired",
+      message: expect.stringContaining("expired"),
+    });
+  });
+
   it("injects the host-sourced credential and cleans it up on success", async () => {
     const storePath = await tempStorePath();
     const store = createAgentRunStore(storePath);

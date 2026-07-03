@@ -167,6 +167,12 @@ export async function executeAgentRun(run, options) {
     err.code = "credential_not_found";
     throw err;
   }
+  const expiry = credentialExpiryInfo(run.agent, credentialContent);
+  if (expiry && expiry.expired) {
+    const err = new Error(staleCredentialMessage(run.agent, config, expiry));
+    err.code = "credential_expired";
+    throw err;
+  }
   await injectCredential(
     run.container.name,
     run.container.project,
@@ -234,6 +240,34 @@ function missingCredentialMessage(agent, config) {
   const label = agent === "codex" ? "Codex" : "Claude";
   const cli = agent === "codex" ? "codex login" : "claude login";
   return `${label} credential not found in ${config.credentialSourceContainer} workspace -- run '${cli}' there.`;
+}
+
+// Only Claude Code's credential format (claudeAiOauth.expiresAt, ms epoch)
+// is understood well enough to check proactively -- Codex's auth.json
+// expiry field is unconfirmed, so codex runs skip this check and surface
+// whatever error the CLI itself produces (same as before this fix).
+function credentialExpiryInfo(agent, rawContent) {
+  if (agent === "codex") return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(rawContent);
+  } catch {
+    return undefined;
+  }
+  const expiresAt = parsed?.claudeAiOauth?.expiresAt;
+  if (typeof expiresAt !== "number") return undefined;
+  return { expiresAt, expired: Date.now() > expiresAt };
+}
+
+function staleCredentialMessage(agent, config, expiry) {
+  const label = agent === "codex" ? "Codex" : "Claude";
+  const cli = agent === "codex" ? "codex" : "claude";
+  const ageMs = Date.now() - expiry.expiresAt;
+  const ageDays = (ageMs / (24 * 60 * 60 * 1000)).toFixed(1);
+  return (
+    `${label} credential in ${config.credentialSourceContainer} expired ${ageDays} day(s) ago ` +
+    `(${new Date(expiry.expiresAt).toISOString()}) -- run '${cli}' interactively there to refresh it.`
+  );
 }
 
 async function readHostCredentialWithRetry(
