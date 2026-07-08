@@ -15,6 +15,7 @@ import {
   validateSetupPayload,
   validateWorkspaceRuntimeStatus,
   type ProvisionerCommand,
+  type ProvisionerError,
   type ProvisionerOperation,
   type RunSetupPayload,
 } from "@/lib/provisioner/contracts";
@@ -768,5 +769,32 @@ describe("provisioner contract validators", () => {
       redactSetupExcerpt("raw /home/agent path AGE-SECRET-KEY-super-secret"),
     ).toBe("raw [REDACTED_PATH] path [REDACTED_AGE_KEY]");
     expect(redactSetupExcerpt("x".repeat(5000))).toContain("[TRUNCATED]");
+  });
+
+  it("accepts mutation_not_authorized as a valid provisioner error code", () => {
+    const error: ProvisionerError = {
+      code: "mutation_not_authorized",
+      message: "shared prototype mode does not allow workspace config mutation by default",
+      retryable: false,
+    };
+    const operation: ProvisionerOperation<"GetWorkspaceStatus"> = {
+      id: "op-1",
+      requestId: "req-1",
+      type: "GetWorkspaceStatus",
+      workspaceId: "workspace-1",
+      status: "failed",
+      error,
+    };
+    const validated = validateProvisionerOperation(
+      operation,
+      {
+        id: "workspace-1",
+        ownerUserId: "user-1",
+        incusProject: "user-abc123",
+        incusContainer: "ws-def456",
+      },
+      "GetWorkspaceStatus",
+    );
+    expect(validated).toMatchObject({ ok: true, value: { error } });
   });
 });

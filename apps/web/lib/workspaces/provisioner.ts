@@ -203,13 +203,41 @@ export function getWorkspaceRefForActor(
   }
 }
 
+export const MUTATING_COMMAND_TYPES = new Set<ProvisionerCommandType>();
+
+export function getMutableWorkspaceRefForActor(
+  actor: ActorContext,
+): { ok: true; workspace: ProvisionerWorkspaceRef } | { ok: false; error: ProvisionerError } {
+  const access = getWorkspaceRefForActor(actor);
+  if (!access.ok) {
+    return access;
+  }
+
+  const ownerMode = process.env.INCUS_WEB_WORKSPACE_OWNER_MODE ?? "none";
+  if (ownerMode === "authenticated" && process.env.INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION !== "1") {
+    return {
+      ok: false,
+      error: {
+        code: "mutation_not_authorized",
+        message:
+          "shared prototype mode does not allow workspace config mutation by default",
+        retryable: false,
+      },
+    };
+  }
+
+  return access;
+}
+
 export async function sendWorkspaceCommand<TType extends ProvisionerCommandType>(
   actor: ActorContext,
   type: TType,
   payload: ProvisionerCommand<TType>["payload"],
   client?: ProvisionerClient,
 ): Promise<ProvisionerOperation<TType>> {
-  const access = getWorkspaceRefForActor(actor);
+  const access = MUTATING_COMMAND_TYPES.has(type)
+    ? getMutableWorkspaceRefForActor(actor)
+    : getWorkspaceRefForActor(actor);
   if (!access.ok) {
     return failedCommandOperation(actor, type, "unknown", access.error);
   }

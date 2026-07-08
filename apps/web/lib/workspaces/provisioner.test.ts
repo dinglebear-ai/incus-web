@@ -11,8 +11,10 @@ import {
   type WorkspaceRuntimeStatus,
 } from "@/lib/provisioner/contracts";
 import {
+  getMutableWorkspaceRefForActor,
   getWorkspaceRefForActor,
   getWorkspaceInventory,
+  MUTATING_COMMAND_TYPES,
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
 
@@ -695,5 +697,138 @@ describe("workspace inventory provisioner", () => {
 
     expect(inventory.actor.email).toBe("other@example.com");
     expect(inventory.workspaces).toHaveLength(0);
+  });
+
+  it("allows the single configured owner to obtain a mutable workspace ref", () => {
+    useOwnerEmail();
+    const actor = ownerActor();
+
+    expect(getMutableWorkspaceRefForActor(actor)).toMatchObject({
+      ok: true,
+      workspace: { id: "workspace-incus-web" },
+    });
+  });
+
+  it("denies a mutable workspace ref for a non-owner", () => {
+    useOwnerEmail();
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "other@example.com", subject: null }),
+    );
+
+    expect(getMutableWorkspaceRefForActor(actor)).toMatchObject({
+      ok: false,
+      error: { code: "unauthenticated_service" },
+    });
+  });
+
+  it("denies a mutable workspace ref in shared-prototype mode by default", () => {
+    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
+    );
+
+    expect(getMutableWorkspaceRefForActor(actor)).toMatchObject({
+      ok: false,
+      error: {
+        code: "mutation_not_authorized",
+        message:
+          "shared prototype mode does not allow workspace config mutation by default",
+      },
+    });
+  });
+
+  it("allows a mutable workspace ref in shared-prototype mode with the explicit second opt-in", () => {
+    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION", "1");
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
+    );
+
+    expect(getMutableWorkspaceRefForActor(actor)).toMatchObject({ ok: true });
+  });
+
+  it("denies a mutable workspace ref when no owner is configured at all", () => {
+    const actor = ownerActor();
+
+    expect(getMutableWorkspaceRefForActor(actor)).toMatchObject({
+      ok: false,
+      error: { code: "unauthenticated_service" },
+    });
+  });
+
+  it("routes commands registered as mutating through the mutation gate, not the plain owner check", async () => {
+    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
+    );
+    const client = { send: vi.fn() };
+
+    // No mutating command type exists in the real contract yet (Phase 1 adds
+    // one). Prove the routing mechanism itself works today by temporarily
+    // registering an existing, harmless command type as mutating — this is
+    // exactly the mechanism Phase 1 will rely on by adding "SetWorkspaceLimits"
+    // to MUTATING_COMMAND_TYPES as its only wiring step.
+    MUTATING_COMMAND_TYPES.add("StopWorkspace");
+    try {
+      const operation = await sendWorkspaceCommand(
+        actor,
+        "StopWorkspace",
+        { force: false, timeoutSeconds: 30 },
+        client,
+      );
+
+      expect(client.send).not.toHaveBeenCalled();
+      expect(operation).toMatchObject({
+        type: "StopWorkspace",
+        status: "failed",
+        error: { code: "mutation_not_authorized" },
+      });
+    } finally {
+      MUTATING_COMMAND_TYPES.delete("StopWorkspace");
+    }
+  });
+
+  it("does not route non-mutating commands through the mutation gate", async () => {
+    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
+    );
+    const client = {
+      send: vi.fn().mockResolvedValue({
+        id: "op-1",
+        requestId: actor.requestId,
+        type: "StopWorkspace",
+        workspaceId: "workspace-incus-web",
+        status: "succeeded",
+        result: {
+          workspaceId: "workspace-incus-web",
+          state: "stopped",
+          status: {
+            workspaceId: "workspace-incus-web",
+            state: "stopped",
+            incusProject: "default",
+            incusContainer: "incus-web",
+            lastCheckedAt: "2026-07-08T00:00:00.000Z",
+          },
+        },
+      }),
+    };
+
+    // StopWorkspace is not registered as mutating today, so shared-mode's
+    // existing lifecycle behavior (any authenticated actor may start/stop
+    // their own prototype workspace) must be unaffected by this change.
+    const operation = await sendWorkspaceCommand(
+      actor,
+      "StopWorkspace",
+      { force: false, timeoutSeconds: 30 },
+      client,
+    );
+
+    expect(client.send).toHaveBeenCalled();
+    expect(operation.status).toBe("succeeded");
   });
 });

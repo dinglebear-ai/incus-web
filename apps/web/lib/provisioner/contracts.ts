@@ -78,6 +78,7 @@ export type AgentControllerKind = (typeof AGENT_CONTROLLER_KINDS)[number];
 export type ProvisionerErrorCode =
   | "invalid_input"
   | "unauthenticated_service"
+  | "mutation_not_authorized"
   | "metadata_mismatch"
   | "invalid_state"
   | "template_unavailable"
@@ -1127,6 +1128,7 @@ function isProvisionerErrorCode(value: unknown): value is ProvisionerErrorCode {
   return (
     value === "invalid_input" ||
     value === "unauthenticated_service" ||
+    value === "mutation_not_authorized" ||
     value === "metadata_mismatch" ||
     value === "invalid_state" ||
     value === "template_unavailable" ||
