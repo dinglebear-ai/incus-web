@@ -1,9 +1,18 @@
 import { timingSafeEqual } from "node:crypto";
 
+// Fails closed (returns false) rather than throwing on a misconfigured
+// (empty) expected token. This is a per-request auth check -- callers must
+// not have to wrap every call in a try/catch to stay fail-closed. Use
+// requireConfiguredToken at startup to fail loudly (exit the process)
+// before any request ever reaches this function; this is the last-resort
+// guard if that precondition is somehow bypassed.
 export function verifyBearerToken(authorizationHeader, expectedToken) {
   const expected = (expectedToken || "").trim();
   if (!expected) {
-    throw new Error("expected token must not be empty");
+    console.error(
+      "verifyBearerToken called with an empty expected token -- denying by default",
+    );
+    return false;
   }
 
   const provided = typeof authorizationHeader === "string" ? authorizationHeader : "";

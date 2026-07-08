@@ -6,6 +6,7 @@ import {
 } from "@/lib/auth/identity";
 import { createStaticPrototypeStatusClient } from "@/lib/provisioner/client";
 import {
+  PROVISIONER_COMMAND_TYPES,
   PROVISIONER_CONTRACT_VERSION,
   type LifecycleWorkspaceResult,
   type WorkspaceRuntimeStatus,
@@ -14,7 +15,7 @@ import {
   getMutableWorkspaceRefForActor,
   getWorkspaceRefForActor,
   getWorkspaceInventory,
-  MUTATING_COMMAND_TYPES,
+  isMutatingCommandType,
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
 
@@ -758,39 +759,6 @@ describe("workspace inventory provisioner", () => {
     });
   });
 
-  it("routes commands registered as mutating through the mutation gate, not the plain owner check", async () => {
-    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
-    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
-    const actor = getActorFromHeaders(
-      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
-    );
-    const client = { send: vi.fn() };
-
-    // No mutating command type exists in the real contract yet (Phase 1 adds
-    // one). Prove the routing mechanism itself works today by temporarily
-    // registering an existing, harmless command type as mutating — this is
-    // exactly the mechanism Phase 1 will rely on by adding "SetWorkspaceLimits"
-    // to MUTATING_COMMAND_TYPES as its only wiring step.
-    MUTATING_COMMAND_TYPES.add("StopWorkspace");
-    try {
-      const operation = await sendWorkspaceCommand(
-        actor,
-        "StopWorkspace",
-        { force: false, timeoutSeconds: 30 },
-        client,
-      );
-
-      expect(client.send).not.toHaveBeenCalled();
-      expect(operation).toMatchObject({
-        type: "StopWorkspace",
-        status: "failed",
-        error: { code: "mutation_not_authorized" },
-      });
-    } finally {
-      MUTATING_COMMAND_TYPES.delete("StopWorkspace");
-    }
-  });
-
   it("does not route non-mutating commands through the mutation gate", async () => {
     vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
     vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
@@ -832,13 +800,16 @@ describe("workspace inventory provisioner", () => {
     expect(operation.status).toBe("succeeded");
   });
 
-  it("has no mutating command types registered yet (Phase 0 ships the gate mechanism, not a populated registry)", () => {
-    // Pins the current, intentional state: PROVISIONER_COMMAND_TYPES has no
-    // resource-limit/mount command yet, so nothing should be in this set.
-    // When Phase 1 adds SetWorkspaceLimits (or similar) to the contract and
-    // registers it here, this test should be updated alongside that change —
-    // if it starts failing unexpectedly, something added an entry without a
-    // corresponding contract/command update, or vice versa.
-    expect(MUTATING_COMMAND_TYPES.size).toBe(0);
+  it("treats no real command type as mutating yet (Phase 0 ships the gate mechanism, not a populated registry)", () => {
+    // Pins the current, intentional state: MUTATING_COMMAND_TYPES in
+    // contracts.ts has no resource-limit/mount command yet, so
+    // isMutatingCommandType must be false for every real command type. When
+    // Phase 1 adds SetWorkspaceLimits (or similar) to that array, this test
+    // should be updated alongside that change — if it starts failing
+    // unexpectedly, something added an entry without a corresponding
+    // contract/command update, or vice versa.
+    for (const type of PROVISIONER_COMMAND_TYPES) {
+      expect(isMutatingCommandType(type)).toBe(false);
+    }
   });
 });

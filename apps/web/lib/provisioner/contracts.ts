@@ -11,6 +11,18 @@ export const PROVISIONER_COMMAND_TYPES = [
   "ListAgentRuns",
 ] as const;
 
+// Command types that mutate workspace configuration (resource limits,
+// mounts) rather than just lifecycle state or agent-run scheduling. These
+// route through the stricter apps/web/lib/workspaces/provisioner.ts
+// getMutableWorkspaceRefForActor authorization check instead of the plain
+// owner check, requiring INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION=1 in
+// shared-prototype mode. Empty today -- no such command exists yet in
+// PROVISIONER_COMMAND_TYPES above (e.g. a future "SetWorkspaceLimits").
+// `satisfies` ties every entry to a real command type at compile time, so
+// a typo or a since-removed command type here is a build error, not a
+// silent runtime gap.
+export const MUTATING_COMMAND_TYPES = [] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
+
 const PROVISIONER_WORKSPACE_STATES = [
   "creating",
   "stopped",

@@ -3,6 +3,7 @@ import type {
   WorkspaceInventory,
 } from "@/lib/workspaces/types";
 import {
+  MUTATING_COMMAND_TYPES,
   PROVISIONER_CONTRACT_VERSION,
   isProvisionerCommandType,
   type ProvisionerCommand,
@@ -203,16 +204,21 @@ export function getWorkspaceRefForActor(
   }
 }
 
-// Intentionally empty today: no mutating (resource-limit/mount) command type
-// exists yet in PROVISIONER_COMMAND_TYPES (contracts.ts). This registry and
-// the routing in sendWorkspaceCommand below exist so that when one is added
-// (e.g. SetWorkspaceLimits), registering it here is the ONLY step required —
-// it cannot be added to the command dispatcher without also going through
-// getMutableWorkspaceRefForActor. This does not restrict existing lifecycle
-// commands (Start/Stop/RestartWorkspace); those intentionally remain
-// available to any actor getWorkspaceRefForActor authorizes, per the
-// existing shared-prototype-mode design.
-export const MUTATING_COMMAND_TYPES = new Set<ProvisionerCommandType>();
+// Built once from the compile-time-checked MUTATING_COMMAND_TYPES array in
+// contracts.ts (empty today -- no mutating command exists yet). Kept
+// module-private and never exported by reference: sendWorkspaceCommand below
+// is the only thing that needs membership, and isMutatingCommandType gives
+// tests/observability a read-only capability instead of a mutable Set. This
+// does not restrict existing lifecycle commands (Start/Stop/RestartWorkspace);
+// those intentionally remain available to any actor getWorkspaceRefForActor
+// authorizes, per the existing shared-prototype-mode design.
+const mutatingCommandTypeSet = new Set<ProvisionerCommandType>(
+  MUTATING_COMMAND_TYPES,
+);
+
+export function isMutatingCommandType(type: ProvisionerCommandType): boolean {
+  return mutatingCommandTypeSet.has(type);
+}
 
 export function getMutableWorkspaceRefForActor(
   actor: ActorContext,
@@ -244,7 +250,7 @@ export async function sendWorkspaceCommand<TType extends ProvisionerCommandType>
   payload: ProvisionerCommand<TType>["payload"],
   client?: ProvisionerClient,
 ): Promise<ProvisionerOperation<TType>> {
-  const access = MUTATING_COMMAND_TYPES.has(type)
+  const access = isMutatingCommandType(type)
     ? getMutableWorkspaceRefForActor(actor)
     : getWorkspaceRefForActor(actor);
   if (!access.ok) {

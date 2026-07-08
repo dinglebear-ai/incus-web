@@ -149,6 +149,16 @@ function requireServiceAuth(req, res) {
   if (verifyBearerToken(req.headers.authorization, token)) {
     return true;
   }
+  // Log presence/absence and length only -- never the raw header value,
+  // since it may contain a partially-correct guessed token.
+  console.error("provisioner auth failed", {
+    remoteAddress: req.socket?.remoteAddress,
+    hasAuthorizationHeader: typeof req.headers.authorization === "string",
+    authorizationHeaderLength:
+      typeof req.headers.authorization === "string"
+        ? req.headers.authorization.length
+        : 0,
+  });
   send(res, 401, {
     code: "unauthenticated_service",
     message: "invalid provisioner service token",

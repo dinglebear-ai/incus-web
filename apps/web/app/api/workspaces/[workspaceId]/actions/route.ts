@@ -120,7 +120,12 @@ function statusForProvisionerError(
 ) {
   if (!error) return 409;
   if (error.retryable) return 503;
-  if (error.code === "unauthenticated_service") return 403;
+  if (
+    error.code === "unauthenticated_service" ||
+    error.code === "mutation_not_authorized"
+  ) {
+    return 403;
+  }
   if (error.code === "invalid_input" || error.code === "metadata_mismatch") {
     return 400;
   }

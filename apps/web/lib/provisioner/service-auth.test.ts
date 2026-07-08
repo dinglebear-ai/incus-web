@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   requireConfiguredToken,
@@ -7,12 +7,20 @@ import {
 
 describe("service-auth", () => {
   describe("verifyBearerToken", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     it("accepts a correctly formatted matching token", () => {
       expect(verifyBearerToken("Bearer secret-token", "secret-token")).toBe(true);
     });
 
-    it("rejects a mismatched token of the same length", () => {
-      expect(verifyBearerToken("Bearer wrong-tokennn", "secret-token")).toBe(false);
+    it("rejects a mismatched token of the same length (exercises the real timingSafeEqual comparison, not the length-mismatch decoy)", () => {
+      // "secret-tokfn" is 12 chars, same as "secret-token" -- differs only
+      // in the second-to-last character, so this hits the genuine
+      // timingSafeEqual(providedBuffer, expectedBuffer) false-comparison
+      // path rather than the length-mismatch dummy-buffer branch below.
+      expect(verifyBearerToken("Bearer secret-tokfn", "secret-token")).toBe(false);
     });
 
     it("rejects a mismatched token of a different length", () => {
@@ -27,9 +35,12 @@ describe("service-auth", () => {
       expect(verifyBearerToken("secret-token", "secret-token")).toBe(false);
     });
 
-    it("throws if the expected token is empty", () => {
-      expect(() => verifyBearerToken("Bearer x", "")).toThrow(
-        "expected token must not be empty",
+    it("fails closed (returns false, does not throw) if the expected token is empty", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      expect(verifyBearerToken("Bearer x", "")).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("empty expected token"),
       );
     });
   });
