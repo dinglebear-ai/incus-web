@@ -11,12 +11,12 @@ import {
 import Link from "next/link";
 import * as React from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/aurora/badge";
+import { Button } from "@/components/ui/aurora/button";
 import { Field } from "@/components/ui/aurora/field";
 import { Input } from "@/components/ui/aurora/input";
 import { NativeSelect } from "@/components/ui/aurora/native-select";
 import { Textarea } from "@/components/ui/aurora/textarea";
-import { Button } from "@/components/ui/button";
 import {
   normalizeAgentRepoInput,
   type AgentRun,
@@ -173,7 +173,7 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
       </div>
 
       {error ? (
-        <p className="border-b border-[var(--aurora-border-default)] px-4 py-2 text-sm text-[var(--aurora-error)]">
+        <p className="border-b border-[var(--aurora-border-default)] px-4 py-2 aurora-text-body text-[var(--aurora-error)]">
           {error}
         </p>
       ) : null}
@@ -246,7 +246,7 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
           </div>
 
           <div className="min-w-0 border-t border-[var(--aurora-border-default)]">
-            <div className="flex items-center justify-between border-b border-[var(--aurora-border-muted)] px-4 py-3">
+            <div className="flex items-center justify-between border-b border-[var(--aurora-border-default)] px-4 py-3">
               <p className="aurora-text-label text-[var(--aurora-text-primary)]">
                 Queue
               </p>
@@ -290,7 +290,7 @@ function AgentRunRow({
     <Link
       aria-current={selected ? "page" : undefined}
       aria-label={`Open full session viewer for ${run.id}`}
-      className={`grid cursor-pointer gap-2 border-b border-l-[3px] border-b-[var(--aurora-border-muted)] p-3 text-left transition-colors hover:bg-[var(--aurora-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--aurora-accent-primary)] ${
+      className={`grid cursor-pointer gap-2 border-b border-l-[3px] border-b-[var(--aurora-border-default)] p-3 text-left transition-colors hover:bg-[var(--aurora-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--aurora-accent-primary)] ${
         selected
           ? "border-l-[var(--aurora-accent-primary)] bg-[color-mix(in_srgb,var(--aurora-accent-primary)_9%,var(--aurora-control-surface))]"
           : "border-l-transparent bg-[var(--aurora-control-surface)]"
@@ -302,7 +302,7 @@ function AgentRunRow({
           <p className="aurora-text-code truncate text-[var(--aurora-text-primary)]">
             {run.id}
           </p>
-          <p className="mt-1 line-clamp-2 text-sm text-[var(--aurora-text-primary)]">
+          <p className="mt-1 line-clamp-2 aurora-text-body text-[var(--aurora-text-primary)]">
             {run.task}
           </p>
         </div>
@@ -317,7 +317,7 @@ function AgentRunRow({
         </div>
       </div>
 
-      <div className="grid gap-1 text-sm text-[var(--aurora-text-muted)]">
+      <div className="grid gap-1 aurora-text-body text-[var(--aurora-text-muted)]">
         <span className="truncate">
           {run.agent} / {run.phase} / {run.repoUrl}
         </span>
@@ -327,7 +327,7 @@ function AgentRunRow({
       </div>
 
       {outputEntry ? (
-        <p className="truncate text-xs text-[var(--aurora-text-muted)]">
+        <p className="truncate aurora-text-caption text-[var(--aurora-text-muted)]">
           {formatTime(outputEntry.at)} {outputEntry.level}: {outputEntry.message}
         </p>
       ) : null}
@@ -350,7 +350,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
   const live = run.status === "queued" || run.status === "running";
 
   return (
-    <div className="flex min-h-0 flex-col bg-[color-mix(in_srgb,var(--aurora-panel-deep)_68%,var(--aurora-panel-medium))]">
+    <div className="flex min-h-0 flex-col bg-[color-mix(in_srgb,var(--aurora-page-bg)_68%,var(--aurora-panel-medium))]">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-[var(--aurora-border-default)] px-4 py-3">
         <div className="min-w-0 space-y-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -364,7 +364,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
               {run.id}
             </span>
           </div>
-          <p className="break-words text-sm text-[var(--aurora-text-muted)]">
+          <p className="break-words aurora-text-body text-[var(--aurora-text-muted)]">
             {run.agent} / {run.phase} / {run.repoUrl}
           </p>
         </div>
@@ -382,9 +382,9 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
 
       <div className="grid min-h-0 flex-1 gap-4 overflow-auto p-4">
         <div className="min-w-0 space-y-3">
-          <div className="rounded-[4px] border border-[var(--aurora-border-muted)] bg-[var(--aurora-control-surface)] p-3">
+          <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
             <p className="aurora-text-meta mb-1">Task</p>
-            <p className="whitespace-pre-wrap break-words text-sm text-[var(--aurora-text-primary)]">
+            <p className="whitespace-pre-wrap break-words aurora-text-body text-[var(--aurora-text-primary)]">
               {run.task}
             </p>
           </div>
@@ -394,12 +394,12 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
               <ClockIcon aria-hidden="true" className="size-3.5" />
               <span className="aurora-text-meta">Run log</span>
             </div>
-            <ol className="max-h-80 min-h-56 overflow-auto rounded-[4px] border border-[var(--aurora-border-muted)] bg-[color-mix(in_srgb,var(--aurora-panel-deep)_88%,black)] p-3 text-xs leading-5">
+            <ol className="max-h-80 min-h-56 overflow-auto rounded-[4px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5">
               {outputEntries.length > 0 ? (
                 outputEntries.map((entry, index) => (
                   <li
                     key={`${entry.at}-${index}`}
-                    className="grid gap-1 border-b border-[var(--aurora-border-muted)] py-2 last:border-b-0 first:pt-0 last:pb-0 md:grid-cols-[9rem_4.5rem_minmax(0,1fr)]"
+                    className="grid gap-1 border-b border-[var(--aurora-border-default)] py-2 last:border-b-0 first:pt-0 last:pb-0 md:grid-cols-[9rem_4.5rem_minmax(0,1fr)]"
                   >
                     <span className="aurora-text-code text-[var(--aurora-text-muted)]">
                       {formatTime(entry.at)}
@@ -419,7 +419,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
           </div>
         </div>
 
-        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-muted)] bg-[var(--aurora-control-surface)] p-3 text-sm md:grid-cols-2">
+        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body md:grid-cols-2">
           <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
           <RunDetail
             label="Container"
@@ -479,7 +479,7 @@ export function AgentRunFullSessionViewer({
           <p className="aurora-text-code break-all text-[var(--aurora-text-muted)]">
             {run.id}
           </p>
-          <p className="break-words text-sm text-[var(--aurora-text-muted)]">
+          <p className="break-words aurora-text-body text-[var(--aurora-text-muted)]">
             {run.agent} / {run.phase} / {run.repoUrl}
           </p>
         </div>
@@ -491,15 +491,15 @@ export function AgentRunFullSessionViewer({
 
       <div className="grid min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="flex min-h-0 flex-col gap-3">
-          <div className="rounded-[4px] border border-[var(--aurora-border-muted)] bg-[var(--aurora-control-surface)] p-3">
+          <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
             <p className="aurora-text-meta mb-1">Task</p>
-            <p className="whitespace-pre-wrap break-words text-sm text-[var(--aurora-text-primary)]">
+            <p className="whitespace-pre-wrap break-words aurora-text-body text-[var(--aurora-text-primary)]">
               {run.task}
             </p>
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex items-center justify-between gap-3 border-b border-[var(--aurora-border-muted)] pb-2">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--aurora-border-default)] pb-2">
               <div className="flex items-center gap-1.5 text-[var(--aurora-text-muted)]">
                 <ClockIcon aria-hidden="true" className="size-3.5" />
                 <span className="aurora-text-meta">Full run log</span>
@@ -508,12 +508,12 @@ export function AgentRunFullSessionViewer({
                 {outputEntries.length} entries
               </span>
             </div>
-            <ol className="min-h-0 flex-1 overflow-auto rounded-b-[4px] border-x border-b border-[var(--aurora-border-muted)] bg-[color-mix(in_srgb,var(--aurora-panel-deep)_88%,black)] p-3 text-xs leading-5">
+            <ol className="min-h-0 flex-1 overflow-auto rounded-b-[4px] border-x border-b border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5">
               {outputEntries.length > 0 ? (
                 outputEntries.map((entry, index) => (
                   <li
                     key={`${entry.at}-${index}`}
-                    className="grid gap-2 border-b border-[var(--aurora-border-muted)] py-2 last:border-b-0 first:pt-0 last:pb-0 lg:grid-cols-[9rem_5rem_minmax(0,1fr)]"
+                    className="grid gap-2 border-b border-[var(--aurora-border-default)] py-2 last:border-b-0 first:pt-0 last:pb-0 lg:grid-cols-[9rem_5rem_minmax(0,1fr)]"
                   >
                     <span className="aurora-text-code text-[var(--aurora-text-muted)]">
                       {formatTime(entry.at)}
@@ -534,7 +534,7 @@ export function AgentRunFullSessionViewer({
           </div>
         </div>
 
-        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-muted)] bg-[var(--aurora-control-surface)] p-3 text-sm sm:grid-cols-2 xl:grid-cols-1">
+        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body sm:grid-cols-2 xl:grid-cols-1">
           <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
           <RunDetail
             label="Container"
@@ -639,7 +639,7 @@ function RunDetail({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <dt className="aurora-text-meta">{label}</dt>
-      <dd className="break-words text-sm text-[var(--aurora-text-primary)]">
+      <dd className="break-words aurora-text-body text-[var(--aurora-text-primary)]">
         {value}
       </dd>
     </div>
