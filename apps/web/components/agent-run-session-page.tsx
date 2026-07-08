@@ -5,7 +5,7 @@ import Link from "next/link";
 import * as React from "react";
 
 import { AgentRunFullSessionViewer } from "@/components/agent-run-dispatch";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/aurora/button";
 import type { AgentRun } from "@/lib/provisioner/contracts";
 
 export function AgentRunSessionPage({
