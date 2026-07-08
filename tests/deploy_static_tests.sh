@@ -363,7 +363,8 @@ if ! grep -Fq -- "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1" "$root/README.md"; 
 fi
 
 for needle in \
-  "INCUS_WEB_PROVISIONER_TOKEN is required" \
+  "requireConfiguredToken(" \
+  "verifyBearerToken(req.headers.authorization, token)" \
   "INCUS_WEB_PROVISIONER_HOST must be loopback-only" \
   "unlinkExistingSocket(socketPath)" \
   "socketAcceptsConnections(path)" \
@@ -392,6 +393,15 @@ if ! grep -Fq -- "scripts/provisioner-server.mjs" "$workflow"; then
   printf 'missing expected provisioner server workflow trigger\n' >&2
   exit 1
 fi
+
+for needle in \
+  "\${envVarName} is required" \
+  "timingSafeEqual"; do
+  if ! grep -Fq -- "$needle" "$root/scripts/service-auth.mjs"; then
+    printf 'missing expected shared service-auth content: %s\n' "$needle" >&2
+    exit 1
+  fi
+done
 if ! grep -Fq -- "node --check scripts/provisioner-server.mjs" "$workflow"; then
   printf 'missing expected provisioner server workflow validation\n' >&2
   exit 1
