@@ -9,6 +9,7 @@ import {
   validateAgentRun,
   validateDispatchAgentRunPayload,
   validateListAgentRunsPayload,
+  normalizeAgentRepoInput,
   validateProvisionerCommand,
   validateProvisionerOperation,
   validateSetupPayload,
@@ -358,6 +359,19 @@ describe("provisioner contract validators", () => {
     });
   });
 
+  it("normalizes GitHub repo shorthand for agent runs", () => {
+    expect(normalizeAgentRepoInput("jmagar/incus-web")).toBe(
+      "https://github.com/jmagar/incus-web",
+    );
+    expect(normalizeAgentRepoInput(" github.com/jmagar/incus-web.git ")).toBe(
+      "https://github.com/jmagar/incus-web",
+    );
+    expect(normalizeAgentRepoInput("https://github.com/jmagar/incus-web.git")).toBe(
+      "https://github.com/jmagar/incus-web.git",
+    );
+    expect(normalizeAgentRepoInput("jmagar/repo..bad")).toBe("jmagar/repo..bad");
+  });
+
   it("requires every agent run to own a container from creation", () => {
     const run = {
       id: "run_20260702000102_ab12cd34",
@@ -385,12 +399,25 @@ describe("provisioner contract validators", () => {
         turnId: "turn_456",
         url: "ws://127.0.0.1:4500",
       },
+      logs: [
+        {
+          at: "2026-07-02T00:01:02.500Z",
+          level: "info",
+          message: "Attaching Codex app-server controller",
+        },
+      ],
       error: "Codex app-server controller is not configured for this host.",
     };
 
     expect(validateAgentRun(run, baseCommand.workspace).ok).toBe(true);
     expect(
       validateAgentRun({ ...run, container: undefined }, baseCommand.workspace),
+    ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+    expect(
+      validateAgentRun(
+        { ...run, logs: [{ at: "not-a-date", level: "info", message: "x" }] },
+        baseCommand.workspace,
+      ),
     ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
   });
 

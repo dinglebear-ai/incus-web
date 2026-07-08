@@ -79,7 +79,7 @@ describe("agent-runs route", () => {
             state: "planned",
           },
           agent: "codex",
-          repoUrl: "git@github.com:jmagar/incus-web.git",
+          repoUrl: "https://github.com/jmagar/incus-web",
           task: "Run tests",
           phase: "queued",
           status: "queued",
@@ -94,7 +94,7 @@ describe("agent-runs route", () => {
         method: "POST",
         body: JSON.stringify({
           agent: "codex",
-          repoUrl: "git@github.com:jmagar/incus-web.git",
+          repoUrl: "jmagar/incus-web",
           task: "Run tests",
         }),
       }),
@@ -107,7 +107,7 @@ describe("agent-runs route", () => {
       "DispatchAgentRun",
       {
         agent: "codex",
-        repoUrl: "git@github.com:jmagar/incus-web.git",
+        repoUrl: "https://github.com/jmagar/incus-web",
         task: "Run tests",
       },
     );

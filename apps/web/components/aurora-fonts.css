@@ -3,7 +3,7 @@
   font-style: normal;
   font-weight: 200 800;
   font-display: swap;
-  src: url("https://aurora.tootie.tv/fonts/aurora/manrope-var.woff2") format("woff2-variations");
+  src: url("/fonts/aurora/manrope-var.woff2") format("woff2-variations");
 }
 
 @font-face {
@@ -11,7 +11,7 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url("https://aurora.tootie.tv/fonts/aurora/inter-var.woff2") format("woff2-variations");
+  src: url("/fonts/aurora/inter-var.woff2") format("woff2-variations");
 }
 
 @font-face {
@@ -19,7 +19,7 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url("https://aurora.tootie.tv/fonts/aurora/noto-sans-var.woff2") format("woff2");
+  src: url("/fonts/aurora/noto-sans-var.woff2") format("woff2");
 }
 
 @font-face {
@@ -27,5 +27,5 @@
   font-style: normal;
   font-weight: 100 800;
   font-display: swap;
-  src: url("https://aurora.tootie.tv/fonts/aurora/jetbrains-mono-var.woff2") format("woff2-variations");
+  src: url("/fonts/aurora/jetbrains-mono-var.woff2") format("woff2-variations");
 }

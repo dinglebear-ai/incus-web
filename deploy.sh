@@ -61,6 +61,8 @@ main() {
   INCUS_WEB_BOOTSTRAP_SERVER_URL="${INCUS_WEB_BOOTSTRAP_SERVER_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/bootstrap-server.mjs}"
   INCUS_WEB_IDENTITY_PROXY="${INCUS_WEB_IDENTITY_PROXY:-$SCRIPT_DIR/scripts/identity-proxy.mjs}"
   INCUS_WEB_IDENTITY_PROXY_URL="${INCUS_WEB_IDENTITY_PROXY_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/identity-proxy.mjs}"
+  INCUS_WEB_GHOSTTY_AURORA_PATCH="${INCUS_WEB_GHOSTTY_AURORA_PATCH:-$SCRIPT_DIR/scripts/ghostty-aurora-patch.mjs}"
+  INCUS_WEB_GHOSTTY_AURORA_PATCH_URL="${INCUS_WEB_GHOSTTY_AURORA_PATCH_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/ghostty-aurora-patch.mjs}"
   ENABLE_HOST_PROVISIONER="${ENABLE_HOST_PROVISIONER:-1}"
   INCUS_WEB_PROVISIONER_SERVER="${INCUS_WEB_PROVISIONER_SERVER:-$SCRIPT_DIR/scripts/provisioner-server.mjs}"
   INCUS_WEB_PROVISIONER_SERVER_URL="${INCUS_WEB_PROVISIONER_SERVER_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/provisioner-server.mjs}"
@@ -72,6 +74,14 @@ main() {
   INCUS_WEB_PROVISIONER_TOKEN_FILE="${INCUS_WEB_PROVISIONER_TOKEN_FILE:-/etc/incus-web/provisioner.token}"
   INCUS_WEB_PROVISIONER_SOCKET="${INCUS_WEB_PROVISIONER_SOCKET:-/run/incus-web/provisioner.sock}"
   INCUS_WEB_PROVISIONER_SOCKET_MODE="${INCUS_WEB_PROVISIONER_SOCKET_MODE:-0660}"
+  ENABLE_CODEX_APP_SERVER="${ENABLE_CODEX_APP_SERVER:-$ENABLE_HOST_PROVISIONER}"
+  INCUS_WEB_CODEX_APP_SERVER_USER="${INCUS_WEB_CODEX_APP_SERVER_USER:-${SUDO_USER:-$(id -un)}}"
+  INCUS_WEB_CODEX_APP_SERVER_HOST="${INCUS_WEB_CODEX_APP_SERVER_HOST:-127.0.0.1}"
+  INCUS_WEB_CODEX_APP_SERVER_PORT="${INCUS_WEB_CODEX_APP_SERVER_PORT:-4500}"
+  INCUS_WEB_CODEX_APP_SERVER_URL="${INCUS_WEB_CODEX_APP_SERVER_URL:-ws://$INCUS_WEB_CODEX_APP_SERVER_HOST:$INCUS_WEB_CODEX_APP_SERVER_PORT}"
+  INCUS_WEB_CODEX_APP_SERVER_COMMAND="${INCUS_WEB_CODEX_APP_SERVER_COMMAND:-}"
+  INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS="${INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS:-43200000}"
+  INCUS_WEB_CODEX_MODEL="${INCUS_WEB_CODEX_MODEL:-}"
   # Per-command timeout for each individual `incus` CLI invocation the
   # provisioner shells out to, and the overall HTTP request timeout for
   # fully-synchronous commands. Golden-container cloning is expected to

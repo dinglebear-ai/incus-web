@@ -201,6 +201,11 @@ Important variables:
 - `INCUS_WEB_PROVISIONER_SOCKET_MODE`: socket mode used by the host provisioner server. Defaults to `0660`.
 - `INCUS_WEB_PROVISIONER_USER`, `INCUS_WEB_PROVISIONER_GROUP`, and `INCUS_WEB_PROVISIONER_INCUS_GROUP`: host service identity. Add the trusted web-app service user to `INCUS_WEB_PROVISIONER_GROUP`, not to `incus-admin`.
 - `INCUS_WEB_PROVISIONER_NODE`: absolute Node.js executable used by the systemd unit.
+- `ENABLE_CODEX_APP_SERVER`: set to `0` to skip the host Codex app-server controller. Defaults to the host provisioner setting.
+- `INCUS_WEB_CODEX_APP_SERVER_USER`: host user that owns the Codex login and runs `incus-web-codex-app-server.service`. Defaults to the sudo caller or current user.
+- `INCUS_WEB_CODEX_APP_SERVER_HOST`, `INCUS_WEB_CODEX_APP_SERVER_PORT`, and `INCUS_WEB_CODEX_APP_SERVER_URL`: loopback WebSocket endpoint written into the provisioner env for Codex agent runs. Defaults to `ws://127.0.0.1:4500`.
+- `INCUS_WEB_CODEX_APP_SERVER_COMMAND`: optional absolute Codex binary override. When unset, deploy prefers the selected user's standalone Codex install, then `command -v codex` for that user.
+- `INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS` and `INCUS_WEB_CODEX_MODEL`: optional Codex app-server request timeout and model override passed to the provisioner.
 - `ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD`: set to `1` only when curl-piping deploy and intentionally fetching `scripts/provisioner-server.mjs` from `INCUS_WEB_PROVISIONER_SERVER_URL`.
 - `ENABLE_HOST_WEB_APP`: set to `0` to skip the host Next.js control-plane systemd unit, or `1` to require it. When unset, checkout deploys enable it and curl-piped deploys leave it off.
 - `INCUS_WEB_APP_DIR`: checkout path containing `apps/web/package.json`. Defaults to the repo checkout used by `deploy.sh`.

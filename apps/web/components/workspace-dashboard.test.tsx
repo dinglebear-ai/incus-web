@@ -162,9 +162,57 @@ describe("WorkspaceDashboard", () => {
       createdAt: "2026-07-02T00:01:02.000Z",
       updatedAt: "2026-07-02T00:01:03.000Z",
       completedAt: "2026-07-02T00:01:03.000Z",
-      controller: { kind: "codex-app-server" },
+      controller: {
+        kind: "codex-app-server",
+        sessionId: "019f2afd-7578-7652-9908-fe628cb04f69",
+        turnId: "019f2afd-76f6-7810-bd2f-0efc7d3bb190",
+        url: "ws://127.0.0.1:40721",
+      },
       lastLogExcerpt:
-        "Codex app-server controller is not configured for this host.",
+        "Codex app-server controller is not configured for this host.\nFull diagnostic line stays visible.",
+      logs: [
+        {
+          at: "2026-07-02T00:01:02.500Z",
+          level: "info",
+          message: "Cloning incus-web-agent-golden into agent-run-ab12cd34",
+        },
+        {
+          at: "2026-07-02T00:01:02.600Z",
+          level: "info",
+          message: "runner",
+        },
+        {
+          at: "2026-07-02T00:01:02.700Z",
+          level: "info",
+          message: ",",
+        },
+        {
+          at: "2026-07-02T00:01:02.800Z",
+          level: "info",
+          message: "then",
+        },
+        {
+          at: "2026-07-02T00:01:02.900Z",
+          level: "info",
+          message: "create",
+        },
+        {
+          at: "2026-07-02T00:01:02.950Z",
+          level: "info",
+          message: "the",
+        },
+        {
+          at: "2026-07-02T00:01:02.980Z",
+          level: "info",
+          message: "issue",
+        },
+        {
+          at: "2026-07-02T00:01:03.000Z",
+          level: "error",
+          message:
+            "Codex app-server controller is not configured for this host.\nFull diagnostic line stays visible.",
+        },
+      ],
     };
     const fetchMock = vi
       .fn()
@@ -187,23 +235,57 @@ describe("WorkspaceDashboard", () => {
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
-    fireEvent.change(screen.getByLabelText("Repo URL"), {
-      target: { value: "https://github.com/jmagar/incus-web.git" },
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
-    fireEvent.change(screen.getByLabelText("Task"), {
+
+    fireEvent.change(screen.getByLabelText(/Repo URL/), {
+      target: { value: "jmagar/incus-web" },
+    });
+    fireEvent.change(screen.getByLabelText(/Task/), {
       target: { value: "Run tests" },
     });
     fireEvent.click(screen.getByRole("button", { name: /dispatch run/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/run_20260702000102_ab12cd34/)).toBeInTheDocument();
+      expect(
+        screen.getAllByText(/run_20260702000102_ab12cd34/).length,
+      ).toBeGreaterThan(0);
+    });
+    const postCall = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(JSON.parse(String((postCall?.[1] as RequestInit | undefined)?.body))).toMatchObject({
+      repoUrl: "https://github.com/jmagar/incus-web",
+      task: "Run tests",
     });
     expect(screen.getAllByText(/agent-run-ab12cd34/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/codex-app-server/).length).toBeGreaterThan(0);
     expect(
-      screen.getByText(
-        "Codex app-server controller is not configured for this host.",
-      ),
+      screen.getAllByText("019f2afd-76f6-7810-bd2f-0efc7d3bb190").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Full diagnostic line stays visible/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(
+        "Cloning incus-web-agent-golden into agent-run-ab12cd34",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("runner, then create the issue").length).toBeGreaterThan(
+      0,
+    );
+    expect(
+      screen.getByRole("heading", { name: "Session viewer" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("ws://127.0.0.1:40721")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "Open full session viewer for run_20260702000102_ab12cd34",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/workspaces/workspace-incus-web/agent-runs/run_20260702000102_ab12cd34",
+    );
   });
 });

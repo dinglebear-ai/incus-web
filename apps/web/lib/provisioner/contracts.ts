@@ -195,8 +195,15 @@ export type AgentRun = {
   updatedAt: string;
   completedAt?: string;
   controller?: AgentRunController;
+  logs?: AgentRunLogEntry[];
   lastLogExcerpt?: string;
   error?: string;
+};
+
+export type AgentRunLogEntry = {
+  at: string;
+  level: "info" | "success" | "warn" | "error";
+  message: string;
 };
 
 export type DispatchAgentRunPayload = {
@@ -451,6 +458,28 @@ export function validateDispatchAgentRunPayload(
   return { ok: true, value: payload as DispatchAgentRunPayload };
 }
 
+export function normalizeAgentRepoInput(value: string): string {
+  const trimmed = value.trim();
+  const shorthand = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(
+    trimmed,
+  );
+  if (
+    shorthand &&
+    shorthand[2].length <= 100 &&
+    /^[A-Za-z0-9_.-]*[A-Za-z0-9]$/.test(shorthand[2]) &&
+    !shorthand[2].includes("..")
+  ) {
+    return `https://github.com/${shorthand[1]}/${shorthand[2]}`;
+  }
+
+  const githubPath = /^github\.com\/(.+)$/i.exec(trimmed);
+  if (githubPath) {
+    return normalizeAgentRepoInput(githubPath[1]);
+  }
+
+  return trimmed;
+}
+
 export function validateListAgentRunsPayload(
   payload: unknown,
 ): ValidationResult<ListAgentRunsPayload> {
@@ -510,6 +539,9 @@ export function validateAgentRun(
   }
   if (run.controller !== undefined && !isAgentRunController(run.controller)) {
     return invalid("agent run controller is invalid");
+  }
+  if (run.logs !== undefined && !isAgentRunLogs(run.logs)) {
+    return invalid("agent run logs are invalid");
   }
   if (run.lastLogExcerpt !== undefined && typeof run.lastLogExcerpt !== "string") {
     return invalid("agent run lastLogExcerpt is invalid");
@@ -921,6 +953,26 @@ function isSetupSummary(value: unknown): value is ProvisionerSetupSummary {
     hasOptionalCheckStatus(value.packageStatus) &&
     (value.lastLogExcerpt === undefined ||
       typeof value.lastLogExcerpt === "string")
+  );
+}
+
+function isAgentRunLogs(value: unknown): value is AgentRunLogEntry[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 200 &&
+    value.every(
+      (entry) =>
+        isRecord(entry) &&
+        hasOnlyKeys(entry, ["at", "level", "message"]) &&
+        typeof entry.at === "string" &&
+        !Number.isNaN(Date.parse(entry.at)) &&
+        (entry.level === "info" ||
+          entry.level === "success" ||
+          entry.level === "warn" ||
+          entry.level === "error") &&
+        typeof entry.message === "string" &&
+        entry.message.length <= 20000,
+    )
   );
 }
 

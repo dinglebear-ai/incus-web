@@ -489,6 +489,26 @@ push_open_script() {
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 }
 
+push_ghostty_aurora_patch() {
+  local name="$1"
+  local source_file="$INCUS_WEB_GHOSTTY_AURORA_PATCH"
+  local tmp_file=""
+
+  if [[ "$TERMINAL_BACKEND" != "ghostty-web" ]]; then
+    return
+  fi
+
+  if [[ ! -f "$source_file" ]]; then
+    tmp_file="$(mktemp)"
+    curl -fsSL "$INCUS_WEB_GHOSTTY_AURORA_PATCH_URL" -o "$tmp_file"
+    source_file="$tmp_file"
+  fi
+
+  incus_cmd file push "$source_file" "$name/usr/local/bin/incus-web-ghostty-aurora-patch"
+  incus_cmd exec "$name" -- chmod 755 /usr/local/bin/incus-web-ghostty-aurora-patch
+  [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
+}
+
 ensure_host_node() {
   if [[ -x "$INCUS_WEB_PROVISIONER_NODE" ]]; then
     if [[ -x "${INCUS_WEB_APP_NPM:-/usr/bin/npm}" || "$ENABLE_HOST_WEB_APP" != "1" ]]; then
@@ -635,6 +655,19 @@ validate_port_value() {
   (( value >= 1 && value <= 65535 )) || die "$name must be between 1 and 65535"
 }
 
+validate_loopback_host_value() {
+  local name="$1"
+  local value="$2"
+
+  case "$value" in
+    127.0.0.1|::1|localhost)
+      ;;
+    *)
+      die "$name must be loopback-only"
+      ;;
+  esac
+}
+
 validate_env_file_value() {
   local name="$1"
   local value="$2"
@@ -662,6 +695,117 @@ ensure_host_provisioner_systemd() {
   [[ -d /run/systemd/system ]] || die "systemd is not running; set ENABLE_HOST_PROVISIONER=0 to skip the host provisioner service"
 }
 
+codex_app_server_home() {
+  local user="$1"
+  getent passwd "$user" | cut -d: -f6
+}
+
+run_as_user() {
+  local user="$1"
+  shift
+  if [[ "$(id -u)" -eq 0 ]]; then
+    runuser -u "$user" -- "$@"
+  else
+    sudo -u "$user" "$@"
+  fi
+}
+
+resolve_codex_app_server_command() {
+  local user="$1"
+  local home
+  local command_path
+
+  if [[ -n "${INCUS_WEB_CODEX_APP_SERVER_COMMAND:-}" ]]; then
+    printf '%s\n' "$INCUS_WEB_CODEX_APP_SERVER_COMMAND"
+    return
+  fi
+
+  home="$(codex_app_server_home "$user")"
+  [[ -n "$home" ]] || die "could not resolve home directory for INCUS_WEB_CODEX_APP_SERVER_USER=$user"
+  if [[ -x "$home/.codex/packages/standalone/current/codex" ]]; then
+    printf '%s\n' "$home/.codex/packages/standalone/current/codex"
+    return
+  fi
+
+  command_path="$(run_as_user "$user" sh -lc 'command -v codex' 2>/dev/null || true)"
+  [[ -n "$command_path" ]] || die "could not find codex for INCUS_WEB_CODEX_APP_SERVER_USER=$user; set INCUS_WEB_CODEX_APP_SERVER_COMMAND"
+  printf '%s\n' "$command_path"
+}
+
+configure_codex_app_server() {
+  local tmp_unit
+  local codex_home
+  local codex_command
+
+  if [[ "${ENABLE_CODEX_APP_SERVER:-0}" != "1" ]]; then
+    if have systemctl; then
+      sudo_cmd systemctl disable --now incus-web-codex-app-server >/dev/null 2>&1 || true
+    fi
+    return
+  fi
+
+  ensure_host_provisioner_systemd
+  id -u "$INCUS_WEB_CODEX_APP_SERVER_USER" >/dev/null 2>&1 || die "Codex app-server user does not exist: $INCUS_WEB_CODEX_APP_SERVER_USER"
+  validate_loopback_host_value INCUS_WEB_CODEX_APP_SERVER_HOST "$INCUS_WEB_CODEX_APP_SERVER_HOST"
+  validate_port_value INCUS_WEB_CODEX_APP_SERVER_PORT "$INCUS_WEB_CODEX_APP_SERVER_PORT"
+  validate_env_file_value INCUS_WEB_CODEX_APP_SERVER_URL "$INCUS_WEB_CODEX_APP_SERVER_URL"
+  validate_systemd_env_value INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS "$INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS"
+  if [[ -n "${INCUS_WEB_CODEX_MODEL:-}" ]]; then
+    validate_systemd_env_value INCUS_WEB_CODEX_MODEL "$INCUS_WEB_CODEX_MODEL"
+  fi
+
+  codex_home="$(codex_app_server_home "$INCUS_WEB_CODEX_APP_SERVER_USER")"
+  [[ -n "$codex_home" ]] || die "could not resolve home directory for INCUS_WEB_CODEX_APP_SERVER_USER=$INCUS_WEB_CODEX_APP_SERVER_USER"
+  codex_command="$(resolve_codex_app_server_command "$INCUS_WEB_CODEX_APP_SERVER_USER")"
+
+  tmp_unit="$(mktemp)"
+  cat >"$tmp_unit" <<EOF
+[Unit]
+Description=incus-web Codex app-server loopback controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$INCUS_WEB_CODEX_APP_SERVER_USER
+WorkingDirectory=$codex_home
+Environment=HOME=$codex_home
+ExecStart=$codex_command app-server --listen $INCUS_WEB_CODEX_APP_SERVER_URL
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=$codex_home/.codex
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo_cmd install -m 644 "$tmp_unit" /etc/systemd/system/incus-web-codex-app-server.service
+  rm -f "$tmp_unit"
+  sudo_cmd systemctl daemon-reload
+  sudo_cmd systemctl enable incus-web-codex-app-server
+  sudo_cmd systemctl restart incus-web-codex-app-server
+  wait_for_codex_app_server
+  log "Codex app-server: incus-web-codex-app-server via $INCUS_WEB_CODEX_APP_SERVER_URL"
+}
+
+wait_for_codex_app_server() {
+  local ready_url
+
+  ready_url="http://$INCUS_WEB_CODEX_APP_SERVER_HOST:$INCUS_WEB_CODEX_APP_SERVER_PORT/readyz"
+  for _ in $(seq 1 30); do
+    if curl -fsS "$ready_url" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+
+  sudo_cmd systemctl --no-pager --full status incus-web-codex-app-server || true
+  die "Codex app-server did not become healthy at $ready_url"
+}
+
 write_host_provisioner_env() {
   local name="$1"
   local tmp_file
@@ -675,6 +819,13 @@ write_host_provisioner_env() {
   validate_systemd_env_value CONTAINER_NAME "$name"
   validate_systemd_env_value INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS"
   validate_systemd_env_value INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS"
+  if [[ "${ENABLE_CODEX_APP_SERVER:-0}" == "1" ]]; then
+    validate_env_file_value INCUS_WEB_CODEX_APP_SERVER_URL "$INCUS_WEB_CODEX_APP_SERVER_URL"
+    validate_systemd_env_value INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS "$INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS"
+    if [[ -n "${INCUS_WEB_CODEX_MODEL:-}" ]]; then
+      validate_systemd_env_value INCUS_WEB_CODEX_MODEL "$INCUS_WEB_CODEX_MODEL"
+    fi
+  fi
 
   tmp_file="$(mktemp)"
   chmod 600 "$tmp_file"
@@ -688,6 +839,13 @@ write_host_provisioner_env() {
     printf 'CONTAINER_NAME=%s\n' "$name"
     printf 'INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS"
     printf 'INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS"
+    if [[ "${ENABLE_CODEX_APP_SERVER:-0}" == "1" ]]; then
+      printf 'INCUS_WEB_CODEX_APP_SERVER_URL=%s\n' "$INCUS_WEB_CODEX_APP_SERVER_URL"
+      printf 'INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS=%s\n' "$INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS"
+      if [[ -n "${INCUS_WEB_CODEX_MODEL:-}" ]]; then
+        printf 'INCUS_WEB_CODEX_MODEL=%s\n' "$INCUS_WEB_CODEX_MODEL"
+      fi
+    fi
   } >"$tmp_file"
 
   sudo_cmd install -d -m 750 -g "$INCUS_WEB_PROVISIONER_GROUP" "$(dirname "$INCUS_WEB_PROVISIONER_ENV_FILE")"
@@ -713,6 +871,7 @@ configure_host_provisioner() {
   ensure_host_provisioner_identity
   install_host_provisioner_server
   ensure_host_provisioner_token
+  configure_codex_app_server
   write_host_provisioner_env "$name"
 
   tmp_unit="$(mktemp)"
@@ -1058,6 +1217,11 @@ fi'
   push_identity_proxy "$name"
   push_info_script "$name"
   push_open_script "$name"
+  push_ghostty_aurora_patch "$name"
+  if [[ "$TERMINAL_BACKEND" == "ghostty-web" ]]; then
+    log "applying Aurora chrome to ghostty-web demo"
+    container_bash "$name" "/usr/local/bin/incus-web-ghostty-aurora-patch"
+  fi
   # The following string is executed inside the container and intentionally
   # contains nested here-docs and shell snippets for files it generates.
   # shellcheck disable=SC1078,SC1079,SC1083,SC2027,SC2068,SC2140,SC2145

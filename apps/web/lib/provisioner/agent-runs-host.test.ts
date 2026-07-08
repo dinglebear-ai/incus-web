@@ -1,6 +1,8 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { createServer } from "node:net";
 
 import { describe, expect, it } from "vitest";
 
@@ -8,6 +10,7 @@ import {
   CODEX_APP_SERVER_NOT_CONFIGURED,
   createAgentRun,
   createAgentRunStore,
+  createCodexAppServerClient,
   dispatchAgentRun,
   executeAgentRun,
   listAgentRuns,
@@ -154,6 +157,27 @@ describe("agent run host store", () => {
       url: "ws://127.0.0.1:4500",
     });
     expect(progress).toEqual(["Codex app-server thread thr_123 running"]);
+  });
+
+  it("connects to Codex app-server without Origin and with bearer auth", async () => {
+    const server = await createFakeCodexAppServer();
+    try {
+      const client = createCodexAppServerClient({
+        url: server.url,
+        token: "secret-token",
+        timeoutMs: 1000,
+      });
+      const result = await client.startTurn({
+        cwd: "/workspace/repo",
+        task: "Run tests",
+      });
+
+      expect(result).toEqual({ threadId: "thr_test", turnId: "turn_test" });
+      expect(server.headers.authorization).toBe("Bearer secret-token");
+      expect(server.headers.origin).toBeUndefined();
+    } finally {
+      await server.close();
+    }
   });
 
   it("fails with an actionable error when the source credential is missing", async () => {
@@ -323,6 +347,45 @@ describe("agent run host store", () => {
     expect(readCount).toBe(2);
     expect(result.status).toBe("succeeded");
   });
+
+  it("handles concurrent run-store updates without temp file collisions", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(command, config(storePath));
+    await store.insert(run);
+
+    await Promise.all(
+      Array.from({ length: 25 }, (_, index) =>
+        store.update(run.id, {
+          phase: "running",
+          status: "running",
+          lastLogExcerpt: `progress ${index}`,
+        }),
+      ),
+    );
+
+    const stored = JSON.parse(await readFile(storePath, "utf8"));
+    expect(stored).toHaveLength(1);
+    expect(stored[0].id).toBe(run.id);
+    expect(stored[0].phase).toBe("running");
+  });
+
+  it("records bounded run log entries alongside the latest excerpt", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const run = createAgentRun(command, config(storePath));
+    await store.insert(run);
+
+    await store.appendLog(run.id, "first progress line");
+    await store.appendLog(run.id, "second progress line", "success");
+
+    const stored = JSON.parse(await readFile(storePath, "utf8"));
+    expect(stored[0].lastLogExcerpt).toBe("second progress line");
+    expect(stored[0].logs).toMatchObject([
+      { level: "info", message: "first progress line" },
+      { level: "success", message: "second progress line" },
+    ]);
+  });
 });
 
 async function tempStorePath() {
@@ -341,4 +404,130 @@ function config(storePath: string) {
     codexAppServerTimeoutMs: 43200000,
     claudeCommandTemplate: "claude -p {{task}}",
   };
+}
+
+async function createFakeCodexAppServer() {
+  const state = {
+    headers: {} as Record<string, string>,
+  };
+  const server = createServer((socket) => {
+    let handshake = Buffer.alloc(0);
+    let frames = Buffer.alloc(0);
+    let didHandshake = false;
+
+    socket.on("data", (chunk) => {
+      if (!didHandshake) {
+        handshake = Buffer.concat([handshake, chunk]);
+        const split = handshake.indexOf("\r\n\r\n");
+        if (split === -1) return;
+        const rawHeaders = handshake.subarray(0, split).toString("latin1");
+        const lines = rawHeaders.split("\r\n");
+        const headers: Record<string, string> = {};
+        for (const line of lines.slice(1)) {
+          const index = line.indexOf(":");
+          if (index === -1) continue;
+          headers[line.slice(0, index).toLowerCase()] = line.slice(index + 1).trim();
+        }
+        state.headers = headers;
+        const accept = createHash("sha1")
+          .update(`${headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+          .digest("base64");
+        socket.write(
+          [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            `Sec-WebSocket-Accept: ${accept}`,
+            "",
+            "",
+          ].join("\r\n"),
+        );
+        didHandshake = true;
+        frames = Buffer.concat([frames, handshake.subarray(split + 4)]);
+      } else {
+        frames = Buffer.concat([frames, chunk]);
+      }
+
+      frames = drainClientFrames(frames, (message) => {
+        const request = JSON.parse(message);
+        if (request.method === "initialize") {
+          sendServerFrame(socket, {
+            id: request.id,
+            result: { protocolVersion: "2024-11-05", serverInfo: { name: "fake" } },
+          });
+        } else if (request.method === "thread/start") {
+          sendServerFrame(socket, {
+            id: request.id,
+            result: { thread: { id: "thr_test" } },
+          });
+        } else if (request.method === "turn/start") {
+          sendServerFrame(socket, {
+            id: request.id,
+            result: { turn: { id: "turn_test" } },
+          });
+          sendServerFrame(socket, {
+            method: "turn/started",
+            params: { turn: { id: "turn_test" } },
+          });
+          sendServerFrame(socket, {
+            method: "turn/completed",
+            params: { turn: { id: "turn_test", status: "completed" } },
+          });
+        }
+      });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("missing server address");
+  return {
+    get headers() {
+      return state.headers;
+    },
+    url: `ws://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+function sendServerFrame(socket: { write(data: Buffer): void }, message: unknown) {
+  const payload = Buffer.from(JSON.stringify(message), "utf8");
+  const headerLength = payload.length < 126 ? 2 : 4;
+  const frame = Buffer.alloc(headerLength + payload.length);
+  frame[0] = 0x81;
+  if (payload.length < 126) {
+    frame[1] = payload.length;
+  } else {
+    frame[1] = 126;
+    frame.writeUInt16BE(payload.length, 2);
+  }
+  payload.copy(frame, headerLength);
+  socket.write(frame);
+}
+
+function drainClientFrames(buffer: Buffer, onMessage: (message: string) => void) {
+  let offset = 0;
+  while (buffer.length - offset >= 6) {
+    const opcode = buffer[offset] & 0x0f;
+    const second = buffer[offset + 1];
+    let length = second & 0x7f;
+    let headerLength = 2;
+    if (length === 126) {
+      if (buffer.length - offset < 8) break;
+      length = buffer.readUInt16BE(offset + 2);
+      headerLength = 4;
+    }
+    const mask = buffer.subarray(offset + headerLength, offset + headerLength + 4);
+    const payloadStart = offset + headerLength + 4;
+    const frameLength = headerLength + 4 + length;
+    if (buffer.length - offset < frameLength) break;
+    const payload = Buffer.alloc(length);
+    for (let index = 0; index < length; index += 1) {
+      payload[index] = buffer[payloadStart + index] ^ mask[index % 4];
+    }
+    if (opcode === 0x1) {
+      onMessage(payload.toString("utf8"));
+    }
+    offset += frameLength;
+  }
+  return buffer.subarray(offset);
 }

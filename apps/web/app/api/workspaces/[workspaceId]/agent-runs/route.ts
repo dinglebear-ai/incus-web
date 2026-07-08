@@ -9,6 +9,7 @@ import {
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
 import {
+  normalizeAgentRepoInput,
   validateDispatchAgentRunPayload,
   validateListAgentRunsPayload,
   type DispatchAgentRunPayload,
@@ -52,7 +53,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!body.ok) {
     return jsonError("invalid_agent_run", body.message, 400);
   }
-  const payload = validateDispatchAgentRunPayload(body.value);
+  const payload = validateDispatchAgentRunPayload(normalizeDispatchInput(body.value));
   if (!payload.ok) {
     return provisionerError(payload.error);
   }
@@ -69,6 +70,18 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
   return Response.json({ ok: true, operation, run: operation.result?.run });
+}
+
+function normalizeDispatchInput(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const payload = value as Record<string, unknown>;
+  return {
+    ...payload,
+    repoUrl:
+      typeof payload.repoUrl === "string"
+        ? normalizeAgentRepoInput(payload.repoUrl)
+        : payload.repoUrl,
+  };
 }
 
 async function prepareRequest(context: RouteContext) {

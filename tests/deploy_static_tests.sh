@@ -72,9 +72,11 @@ require_literal "incus-web-bootstrap-server"
 require_literal "incus-web-identity-proxy"
 require_literal "incus-web-info"
 require_literal "incus-web-open"
+require_literal "incus-web-ghostty-aurora-patch"
 require_literal "INCUS_WEB_INFO_SCRIPT"
 require_literal "INCUS_WEB_IDENTITY_PROXY"
 require_literal "INCUS_WEB_OPEN_SCRIPT"
+require_literal "INCUS_WEB_GHOSTTY_AURORA_PATCH"
 require_literal "ENABLE_HOST_PROVISIONER="
 require_literal "INCUS_WEB_PROVISIONER_SERVER="
 require_literal "INCUS_WEB_PROVISIONER_SERVER_URL="
@@ -89,6 +91,14 @@ require_literal "INCUS_WEB_PROVISIONER_INCUS_GROUP="
 require_literal "INCUS_WEB_PROVISIONER_NODE="
 require_literal "INCUS_WEB_APP_NPM="
 require_literal "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD="
+require_literal "ENABLE_CODEX_APP_SERVER="
+require_literal "INCUS_WEB_CODEX_APP_SERVER_USER="
+require_literal "INCUS_WEB_CODEX_APP_SERVER_HOST="
+require_literal "INCUS_WEB_CODEX_APP_SERVER_PORT="
+require_literal "INCUS_WEB_CODEX_APP_SERVER_URL="
+require_literal "INCUS_WEB_CODEX_APP_SERVER_COMMAND="
+require_literal "INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS="
+require_literal "INCUS_WEB_CODEX_MODEL="
 require_literal "ENABLE_HOST_WEB_APP="
 require_literal "ENABLE_HOST_WEB_APP=0"
 require_literal "INCUS_WEB_APP_DIR="
@@ -110,6 +120,8 @@ require_literal "BROWSER=/usr/local/bin/incus-web-open"
 require_literal "INCUS_WEB_WORKSPACE_LABEL="
 require_literal "--upstream=\"http://127.0.0.1:\$SETUP_PORT/setup/\""
 require_literal "GHOSTTY_ALLOWED_HOSTS"
+require_literal "push_ghostty_aurora_patch"
+require_literal "applying Aurora chrome to ghostty-web demo"
 require_literal "public_host=\"\${PUBLIC_URL#*://}\""
 require_literal "DOTFILES_REPO="
 require_literal "DOTFILES_SOURCE_DIR="
@@ -230,6 +242,10 @@ for needle in \
 	  "INCUS_WEB_PROVISIONER_SOCKET_MODE=0660" \
 	  "INCUS_WEB_PROVISIONER_GROUP=incus-web" \
 	  "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=0" \
+	  "ENABLE_CODEX_APP_SERVER=1" \
+	  "INCUS_WEB_CODEX_APP_SERVER_HOST=127.0.0.1" \
+	  "INCUS_WEB_CODEX_APP_SERVER_PORT=4500" \
+	  "INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS=43200000" \
 	  "ENABLE_HOST_WEB_APP=" \
 	  "INCUS_WEB_APP_PORT=3090" \
 	  "INCUS_WEB_WORKSPACE_OWNER_MODE=none"; do
@@ -249,7 +265,15 @@ for needle in \
   "ensure_host_provisioner_systemd()" \
   "validate_systemd_env_value()" \
   "validate_port_value()" \
+  "validate_loopback_host_value()" \
   "validate_env_file_value()" \
+  "configure_codex_app_server()" \
+  "resolve_codex_app_server_command()" \
+  "wait_for_codex_app_server()" \
+  "incus-web-codex-app-server.service" \
+  "ExecStart=\$codex_command app-server --listen \$INCUS_WEB_CODEX_APP_SERVER_URL" \
+  "INCUS_WEB_CODEX_APP_SERVER_URL=%s" \
+  "INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS=%s" \
   "install_host_provisioner_server()" \
   "ensure_host_provisioner_token()" \
   "write_host_provisioner_env()" \
