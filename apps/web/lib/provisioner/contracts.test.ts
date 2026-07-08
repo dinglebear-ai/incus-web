@@ -65,8 +65,10 @@ describe("provisioner contract validators", () => {
   it("accepts a valid provisioner command envelope", () => {
     const result = validateProvisionerCommand(baseCommand);
 
-    expect(result.ok).toBe(true);
-    expect(result.value?.type).toBe("GetWorkspaceStatus");
+    if (!result.ok) {
+      throw new Error("expected validateProvisionerCommand to succeed");
+    }
+    expect(result.value.type).toBe("GetWorkspaceStatus");
   });
 
   it("rejects unknown contract versions and command types", () => {
@@ -732,7 +734,8 @@ describe("provisioner contract validators", () => {
     expect(JSON.stringify(redactProvisionerCommand(command))).not.toContain(
       "super-secret",
     );
-    expect(redactProvisionerCommand(command).payload).toMatchObject({
+    const redacted = redactProvisionerCommand(command) as { payload: unknown };
+    expect(redacted.payload).toMatchObject({
       dotfilesRepo: "https://github.com/jmagar/dotfiles.git",
       ageKey: {
         value: "[REDACTED]",

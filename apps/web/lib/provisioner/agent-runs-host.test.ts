@@ -135,15 +135,20 @@ describe("agent run host store", () => {
         throw new Error("codex app-server must not shell out through execInContainer");
       },
       {
-        onProgress: async (message) => progress.push(message),
+        onProgress: async (message: string) => progress.push(message),
         codexAppServerClient: {
-          async startTurn(params) {
+          async startTurn(params: {
+            cwd: string;
+            model?: string;
+            task: string;
+            onProgress?: (text: string) => Promise<void>;
+          }) {
             expect(params).toMatchObject({
               cwd: "/workspace/repo",
               model: "gpt-5.4",
               task: "Run tests",
             });
-            await params.onProgress("Codex app-server thread thr_123 running");
+            await params.onProgress?.("Codex app-server thread thr_123 running");
             return { threadId: "thr_123", turnId: "turn_456" };
           },
         },
@@ -170,6 +175,8 @@ describe("agent run host store", () => {
       const result = await client.startTurn({
         cwd: "/workspace/repo",
         task: "Run tests",
+        model: undefined,
+        onProgress: undefined,
       });
 
       expect(result).toEqual({ threadId: "thr_test", turnId: "turn_test" });
@@ -411,8 +418,8 @@ async function createFakeCodexAppServer() {
     headers: {} as Record<string, string>,
   };
   const server = createServer((socket) => {
-    let handshake = Buffer.alloc(0);
-    let frames = Buffer.alloc(0);
+    let handshake: Buffer = Buffer.alloc(0);
+    let frames: Buffer = Buffer.alloc(0);
     let didHandshake = false;
 
     socket.on("data", (chunk) => {

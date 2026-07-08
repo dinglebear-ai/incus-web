@@ -51,7 +51,7 @@ describe("provisioner client", () => {
       status: "succeeded",
       result: status,
     });
-    const client = createProvisionerClient({ send });
+    const client = createProvisionerClient({ send } as ProvisionerTransport);
 
     const operation = await client.send(command);
 
@@ -62,7 +62,7 @@ describe("provisioner client", () => {
 
   it("rejects invalid command envelopes before transport", async () => {
     const send = vi.fn<ProvisionerTransport["send"]>();
-    const client = createProvisionerClient({ send });
+    const client = createProvisionerClient({ send } as ProvisionerTransport);
 
     const operation = await client.send({
       ...command,
@@ -83,7 +83,7 @@ describe("provisioner client", () => {
     const send = vi
       .fn<ProvisionerTransport["send"]>()
       .mockRejectedValue(new Error("socket down"));
-    const client = createProvisionerClient({ send });
+    const client = createProvisionerClient({ send } as ProvisionerTransport);
 
     const operation = await client.send(command);
 
