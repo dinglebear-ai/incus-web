@@ -88,7 +88,7 @@ export function AgentRunSessionPage({
         </div>
 
         {error ? (
-          <div className="rounded-[4px] border border-[var(--aurora-error)] bg-[color-mix(in_srgb,var(--aurora-error)_12%,var(--aurora-control-surface))] p-4 text-sm text-[var(--aurora-text-primary)]">
+          <div className="rounded-[4px] border border-[var(--aurora-error)] bg-[color-mix(in_srgb,var(--aurora-error)_12%,var(--aurora-control-surface))] p-4 aurora-text-body text-[var(--aurora-text-primary)]">
             {error}
           </div>
         ) : null}

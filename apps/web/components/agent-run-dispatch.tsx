@@ -173,7 +173,7 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
       </div>
 
       {error ? (
-        <p className="border-b border-[var(--aurora-border-default)] px-4 py-2 text-sm text-[var(--aurora-error)]">
+        <p className="border-b border-[var(--aurora-border-default)] px-4 py-2 aurora-text-body text-[var(--aurora-error)]">
           {error}
         </p>
       ) : null}
@@ -302,7 +302,7 @@ function AgentRunRow({
           <p className="aurora-text-code truncate text-[var(--aurora-text-primary)]">
             {run.id}
           </p>
-          <p className="mt-1 line-clamp-2 text-sm text-[var(--aurora-text-primary)]">
+          <p className="mt-1 line-clamp-2 aurora-text-body text-[var(--aurora-text-primary)]">
             {run.task}
           </p>
         </div>
@@ -317,7 +317,7 @@ function AgentRunRow({
         </div>
       </div>
 
-      <div className="grid gap-1 text-sm text-[var(--aurora-text-muted)]">
+      <div className="grid gap-1 aurora-text-body text-[var(--aurora-text-muted)]">
         <span className="truncate">
           {run.agent} / {run.phase} / {run.repoUrl}
         </span>
@@ -327,7 +327,7 @@ function AgentRunRow({
       </div>
 
       {outputEntry ? (
-        <p className="truncate text-xs text-[var(--aurora-text-muted)]">
+        <p className="truncate aurora-text-caption text-[var(--aurora-text-muted)]">
           {formatTime(outputEntry.at)} {outputEntry.level}: {outputEntry.message}
         </p>
       ) : null}
@@ -364,7 +364,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
               {run.id}
             </span>
           </div>
-          <p className="break-words text-sm text-[var(--aurora-text-muted)]">
+          <p className="break-words aurora-text-body text-[var(--aurora-text-muted)]">
             {run.agent} / {run.phase} / {run.repoUrl}
           </p>
         </div>
@@ -384,7 +384,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
         <div className="min-w-0 space-y-3">
           <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
             <p className="aurora-text-meta mb-1">Task</p>
-            <p className="whitespace-pre-wrap break-words text-sm text-[var(--aurora-text-primary)]">
+            <p className="whitespace-pre-wrap break-words aurora-text-body text-[var(--aurora-text-primary)]">
               {run.task}
             </p>
           </div>
@@ -419,7 +419,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
           </div>
         </div>
 
-        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 text-sm md:grid-cols-2">
+        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body md:grid-cols-2">
           <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
           <RunDetail
             label="Container"
@@ -479,7 +479,7 @@ export function AgentRunFullSessionViewer({
           <p className="aurora-text-code break-all text-[var(--aurora-text-muted)]">
             {run.id}
           </p>
-          <p className="break-words text-sm text-[var(--aurora-text-muted)]">
+          <p className="break-words aurora-text-body text-[var(--aurora-text-muted)]">
             {run.agent} / {run.phase} / {run.repoUrl}
           </p>
         </div>
@@ -493,7 +493,7 @@ export function AgentRunFullSessionViewer({
         <div className="flex min-h-0 flex-col gap-3">
           <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
             <p className="aurora-text-meta mb-1">Task</p>
-            <p className="whitespace-pre-wrap break-words text-sm text-[var(--aurora-text-primary)]">
+            <p className="whitespace-pre-wrap break-words aurora-text-body text-[var(--aurora-text-primary)]">
               {run.task}
             </p>
           </div>
@@ -534,7 +534,7 @@ export function AgentRunFullSessionViewer({
           </div>
         </div>
 
-        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 text-sm sm:grid-cols-2 xl:grid-cols-1">
+        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body sm:grid-cols-2 xl:grid-cols-1">
           <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
           <RunDetail
             label="Container"
@@ -639,7 +639,7 @@ function RunDetail({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <dt className="aurora-text-meta">{label}</dt>
-      <dd className="break-words text-sm text-[var(--aurora-text-primary)]">
+      <dd className="break-words aurora-text-body text-[var(--aurora-text-primary)]">
         {value}
       </dd>
     </div>
