@@ -831,4 +831,14 @@ describe("workspace inventory provisioner", () => {
     expect(client.send).toHaveBeenCalled();
     expect(operation.status).toBe("succeeded");
   });
+
+  it("has no mutating command types registered yet (Phase 0 ships the gate mechanism, not a populated registry)", () => {
+    // Pins the current, intentional state: PROVISIONER_COMMAND_TYPES has no
+    // resource-limit/mount command yet, so nothing should be in this set.
+    // When Phase 1 adds SetWorkspaceLimits (or similar) to the contract and
+    // registers it here, this test should be updated alongside that change —
+    // if it starts failing unexpectedly, something added an entry without a
+    // corresponding contract/command update, or vice versa.
+    expect(MUTATING_COMMAND_TYPES.size).toBe(0);
+  });
 });

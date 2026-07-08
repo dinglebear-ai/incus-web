@@ -203,6 +203,15 @@ export function getWorkspaceRefForActor(
   }
 }
 
+// Intentionally empty today: no mutating (resource-limit/mount) command type
+// exists yet in PROVISIONER_COMMAND_TYPES (contracts.ts). This registry and
+// the routing in sendWorkspaceCommand below exist so that when one is added
+// (e.g. SetWorkspaceLimits), registering it here is the ONLY step required —
+// it cannot be added to the command dispatcher without also going through
+// getMutableWorkspaceRefForActor. This does not restrict existing lifecycle
+// commands (Start/Stop/RestartWorkspace); those intentionally remain
+// available to any actor getWorkspaceRefForActor authorizes, per the
+// existing shared-prototype-mode design.
 export const MUTATING_COMMAND_TYPES = new Set<ProvisionerCommandType>();
 
 export function getMutableWorkspaceRefForActor(
