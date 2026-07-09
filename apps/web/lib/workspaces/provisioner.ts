@@ -3,6 +3,7 @@ import type {
   WorkspaceInventory,
 } from "@/lib/workspaces/types";
 import {
+  MUTATING_COMMAND_TYPES,
   PROVISIONER_CONTRACT_VERSION,
   isProvisionerCommandType,
   type ProvisionerCommand,
@@ -203,13 +204,55 @@ export function getWorkspaceRefForActor(
   }
 }
 
+// Built once from the compile-time-checked MUTATING_COMMAND_TYPES array in
+// contracts.ts (empty today -- no mutating command exists yet). Kept
+// module-private and never exported by reference: sendWorkspaceCommand below
+// is the only thing that needs membership, and isMutatingCommandType gives
+// tests/observability a read-only capability instead of a mutable Set. This
+// does not restrict existing lifecycle commands (Start/Stop/RestartWorkspace);
+// those intentionally remain available to any actor getWorkspaceRefForActor
+// authorizes, per the existing shared-prototype-mode design.
+const mutatingCommandTypeSet = new Set<ProvisionerCommandType>(
+  MUTATING_COMMAND_TYPES,
+);
+
+export function isMutatingCommandType(type: ProvisionerCommandType): boolean {
+  return mutatingCommandTypeSet.has(type);
+}
+
+export function getMutableWorkspaceRefForActor(
+  actor: ActorContext,
+): { ok: true; workspace: ProvisionerWorkspaceRef } | { ok: false; error: ProvisionerError } {
+  const access = getWorkspaceRefForActor(actor);
+  if (!access.ok) {
+    return access;
+  }
+
+  const ownerMode = process.env.INCUS_WEB_WORKSPACE_OWNER_MODE ?? "none";
+  if (ownerMode === "authenticated" && process.env.INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION !== "1") {
+    return {
+      ok: false,
+      error: {
+        code: "mutation_not_authorized",
+        message:
+          "shared prototype mode does not allow workspace config mutation by default",
+        retryable: false,
+      },
+    };
+  }
+
+  return access;
+}
+
 export async function sendWorkspaceCommand<TType extends ProvisionerCommandType>(
   actor: ActorContext,
   type: TType,
   payload: ProvisionerCommand<TType>["payload"],
   client?: ProvisionerClient,
 ): Promise<ProvisionerOperation<TType>> {
-  const access = getWorkspaceRefForActor(actor);
+  const access = isMutatingCommandType(type)
+    ? getMutableWorkspaceRefForActor(actor)
+    : getWorkspaceRefForActor(actor);
   if (!access.ok) {
     return failedCommandOperation(actor, type, "unknown", access.error);
   }

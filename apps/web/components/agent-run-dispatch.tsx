@@ -457,7 +457,7 @@ export function AgentRunFullSessionViewer({
 }) {
   const outputEntries = runOutputEntries(run);
   const live = run.status === "queued" || run.status === "running";
-  const tailRef = React.useRef<HTMLDivElement>(null);
+  const tailRef = React.useRef<HTMLLIElement>(null);
 
   React.useEffect(() => {
     if (!autoTail) return;

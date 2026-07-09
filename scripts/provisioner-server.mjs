@@ -9,8 +9,18 @@ import {
   dispatchAgentRun,
   listAgentRuns,
 } from "./agent-runs.mjs";
+import { requireConfiguredToken, verifyBearerToken } from "./service-auth.mjs";
 
-const token = (process.env.INCUS_WEB_PROVISIONER_TOKEN || "").trim();
+let token;
+try {
+  token = requireConfiguredToken(
+    process.env.INCUS_WEB_PROVISIONER_TOKEN,
+    "INCUS_WEB_PROVISIONER_TOKEN",
+  );
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
 const socketPath =
   process.env.INCUS_WEB_PROVISIONER_SOCKET || "/run/incus-web/provisioner.sock";
 const socketMode = parseMode(
@@ -62,11 +72,6 @@ const setupPhases = new Set([
   "ready",
   "failed",
 ]);
-
-if (!token) {
-  console.error("INCUS_WEB_PROVISIONER_TOKEN is required");
-  process.exit(1);
-}
 
 function parseMode(value) {
   if (!/^[0-7]{3,4}$/.test(value)) {
@@ -141,9 +146,19 @@ function socketAcceptsConnections(path) {
 }
 
 function requireServiceAuth(req, res) {
-  if (req.headers.authorization === `Bearer ${token}`) {
+  if (verifyBearerToken(req.headers.authorization, token)) {
     return true;
   }
+  // Log presence/absence and length only -- never the raw header value,
+  // since it may contain a partially-correct guessed token.
+  console.error("provisioner auth failed", {
+    remoteAddress: req.socket?.remoteAddress,
+    hasAuthorizationHeader: typeof req.headers.authorization === "string",
+    authorizationHeaderLength:
+      typeof req.headers.authorization === "string"
+        ? req.headers.authorization.length
+        : 0,
+  });
   send(res, 401, {
     code: "unauthenticated_service",
     message: "invalid provisioner service token",

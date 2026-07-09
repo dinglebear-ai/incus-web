@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -176,7 +176,7 @@ describe("host provisioner transport", () => {
 });
 
 function listen(
-  handler: Parameters<typeof createServer>[0],
+  handler: RequestListener,
 ): Promise<{ server: Server; url: string; close: () => Promise<void> }> {
   const server = createServer(handler);
   return new Promise((resolve) => {
