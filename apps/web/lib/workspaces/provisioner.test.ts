@@ -864,13 +864,17 @@ describe("workspace inventory provisioner", () => {
     expect(operation.status).toBe("succeeded");
   });
 
-  it("treats exactly SetWorkspaceLimits and ImportGoldenConfig as mutating today", () => {
+  it("treats workspace config commands and golden config import as mutating today", () => {
     // Pins the current state: MUTATING_COMMAND_TYPES in contracts.ts
-    // contains exactly SetWorkspaceLimits and ImportGoldenConfig. When a
-    // future command (e.g. SetWorkspaceMount, Phase 3) is added to that
-    // array, this test should be updated alongside that change.
+    // contains the command types that need the stricter shared-prototype
+    // mutation opt-in.
     for (const type of PROVISIONER_COMMAND_TYPES) {
-      const expected = type === "SetWorkspaceLimits" || type === "ImportGoldenConfig";
+      const expected =
+        type === "SetWorkspaceLimits" ||
+        type === "SetWorkspaceMount" ||
+        type === "ClearWorkspaceMount" ||
+        type === "CreateWorkspaceSnapshot" ||
+        type === "ImportGoldenConfig";
       expect(isMutatingCommandType(type)).toBe(expected);
     }
   });

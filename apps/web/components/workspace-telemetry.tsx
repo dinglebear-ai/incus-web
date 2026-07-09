@@ -90,7 +90,7 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
       const next = body.workspace as Workspace;
       const polledAt = Date.now();
       setWorkspace(next);
-      setHistory((current) =>
+      setHistory(Array.isArray(body.history) ? body.history : (current) =>
         [...current, sampleFrom(next)].slice(-HISTORY_LENGTH),
       );
       setLastUpdated(polledAt);
@@ -172,13 +172,7 @@ export function TelemetryFreshness({
   }, [live]);
 
   const secondsAgo = Math.max(0, Math.round((now - lastUpdated) / 1000));
-  const label = !live
-    ? "not polling"
-    : polling
-      ? "refreshing…"
-      : secondsAgo <= 1
-        ? "updated just now"
-        : `updated ${secondsAgo}s ago`;
+  const label = freshnessLabel({ live, polling, secondsAgo });
 
   return (
     <span className="inline-flex items-center gap-1.5 aurora-text-meta">
@@ -269,19 +263,33 @@ export function MetricBar({
       <Progress
         value={percentValue}
         indeterminate={percentValue === undefined}
-        variant={
-          percentValue !== undefined && percentValue >= 90
-            ? "error"
-            : percentValue !== undefined && percentValue >= 75
-              ? "warn"
-              : tone === "success"
-                ? "default"
-                : tone === "warn"
-                  ? "warn"
-                  : "default"
-        }
+        variant={progressVariant(percentValue, tone)}
         size="sm"
       />
     </div>
   );
+}
+
+function freshnessLabel({
+  live,
+  polling,
+  secondsAgo,
+}: {
+  live: boolean;
+  polling: boolean;
+  secondsAgo: number;
+}) {
+  if (!live) return "not polling";
+  if (polling) return "refreshing…";
+  if (secondsAgo <= 1) return "updated just now";
+  return `updated ${secondsAgo}s ago`;
+}
+
+function progressVariant(
+  percentValue: number | undefined,
+  tone: "info" | "success" | "warn",
+) {
+  if (percentValue !== undefined && percentValue >= 90) return "error";
+  if (percentValue !== undefined && percentValue >= 75) return "warn";
+  return tone === "warn" ? "warn" : "default";
 }

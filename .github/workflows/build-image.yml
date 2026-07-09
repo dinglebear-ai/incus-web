@@ -13,8 +13,11 @@ on:
       - scripts/build-image.sh
       - scripts/incus-web-lib.sh
       - scripts/provisioner-server.mjs
+      - scripts/build-worker.mjs
+      - scripts/service-auth.mjs
       - scripts/smoke-image.sh
       - tests/deploy_static_tests.sh
+      - tests/build_worker_smoke.mjs
       - docs/contracts/**
       - docs/superpowers/**
       - apps/web/**
@@ -27,8 +30,11 @@ on:
       - scripts/build-image.sh
       - scripts/incus-web-lib.sh
       - scripts/provisioner-server.mjs
+      - scripts/build-worker.mjs
+      - scripts/service-auth.mjs
       - scripts/smoke-image.sh
       - tests/deploy_static_tests.sh
+      - tests/build_worker_smoke.mjs
       - docs/contracts/**
       - docs/superpowers/**
       - apps/web/**
@@ -72,6 +78,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install validation dependencies
         run: |
           sudo apt-get update
@@ -82,7 +93,8 @@ jobs:
         run: |
           bash tests/deploy_static_tests.sh
           bash -n deploy.sh scripts/incus-web-lib.sh scripts/build-image.sh scripts/smoke-image.sh tests/deploy_static_tests.sh
-          node --check scripts/provisioner-server.mjs
+          node --check scripts/provisioner-server.mjs scripts/build-worker.mjs scripts/service-auth.mjs
+          node tests/build_worker_smoke.mjs
           shellcheck deploy.sh scripts/incus-web-lib.sh scripts/build-image.sh scripts/smoke-image.sh tests/deploy_static_tests.sh
 
       - name: Install Incus

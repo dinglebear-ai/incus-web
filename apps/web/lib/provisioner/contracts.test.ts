@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -62,6 +66,21 @@ function successfulOperation(
 }
 
 describe("provisioner contract validators", () => {
+  it("keeps host provisioner boundary constants aligned", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const serverSource = readFileSync(join(here, "../../../../scripts/provisioner-server.mjs"), "utf8");
+    const contractSource = readFileSync(join(here, "contracts.ts"), "utf8");
+
+    expect(readRegexConst(serverSource, "CPU_LIMIT_PATTERN")).toBe(readRegexConst(contractSource, "CPU_LIMIT_PATTERN"));
+    expect(readRegexConst(serverSource, "MEMORY_LIMIT_PATTERN")).toBe(
+      readRegexConst(contractSource, "MEMORY_LIMIT_PATTERN"),
+    );
+    expect(readStringArrayConst(serverSource, "LIMIT_PAYLOAD_KEYS")).toEqual(["cpu", "memory"]);
+    expect(readStringArrayConst(serverSource, "MOUNT_PAYLOAD_KEYS")).toEqual(["hostPath"]);
+    expect(readStringArrayConst(serverSource, "SNAPSHOT_PAYLOAD_KEYS")).toEqual(["name"]);
+    expect(readStringArrayConst(serverSource, "GOLDEN_CONFIG_PAYLOAD_KEYS")).toEqual(["sha256Hex"]);
+  });
+
   it("accepts a valid provisioner command envelope", () => {
     const result = validateProvisionerCommand(baseCommand);
 
@@ -957,6 +976,106 @@ describe("provisioner contract validators", () => {
     expect(result).toMatchObject({ ok: true });
   });
 
+  it("accepts SetWorkspaceMount and ClearWorkspaceMount commands", () => {
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "SetWorkspaceMount",
+        payload: { hostPath: "/var/lib/incus-web/workspaces/workspace-1/main" },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "ClearWorkspaceMount",
+        payload: {},
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("rejects SetWorkspaceMount relative paths and unsupported fields", () => {
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "SetWorkspaceMount",
+        payload: { hostPath: "../escape" },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "SetWorkspaceMount",
+        payload: {
+          hostPath: "/var/lib/incus-web/workspaces/workspace-1/main",
+          containerPath: "/root",
+        },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+  });
+
+  it("accepts workspace snapshot commands and results", () => {
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "CreateWorkspaceSnapshot",
+        payload: { name: "manual-20260709" },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "ListWorkspaceSnapshots",
+        payload: {},
+      }),
+    ).toMatchObject({ ok: true });
+
+    const operation: ProvisionerOperation<"ListWorkspaceSnapshots"> = {
+      id: "op-snapshots-1",
+      requestId: "req-snapshots-1",
+      type: "ListWorkspaceSnapshots",
+      workspaceId: "workspace-1",
+      status: "succeeded",
+      result: {
+        workspaceId: "workspace-1",
+        snapshots: [
+          {
+            name: "manual-20260709",
+            createdAt: "2026-07-09T12:00:00.000Z",
+            stateful: false,
+          },
+        ],
+      },
+    };
+    const validated = validateProvisionerOperation(
+      operation,
+      {
+        id: "workspace-1",
+        ownerUserId: "user-1",
+        incusProject: "user-abc123",
+        incusContainer: "ws-def456",
+      },
+      "ListWorkspaceSnapshots",
+    );
+    expect(validated).toMatchObject({ ok: true });
+  });
+
+  it("rejects unsafe workspace snapshot names", () => {
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "CreateWorkspaceSnapshot",
+        payload: { name: "../escape" },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+    expect(
+      validateProvisionerCommand({
+        ...baseCommand,
+        type: "CreateWorkspaceSnapshot",
+        payload: { name: "manual;reboot" },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+  });
+
   it("accepts an uppercase sha256Hex", () => {
     const command: ProvisionerCommand<"ImportGoldenConfig"> = {
       ...baseCommand,
@@ -1063,3 +1182,15 @@ describe("provisioner contract validators", () => {
     });
   });
 });
+
+function readRegexConst(source: string, name: string) {
+  const match = source.match(new RegExp(`const ${name} = (/.+/[a-z]*);`));
+  if (!match) throw new Error(`missing ${name}`);
+  return match[1];
+}
+
+function readStringArrayConst(source: string, name: string) {
+  const match = source.match(new RegExp(`const ${name} = \\[([^\\]]*)\\];`));
+  if (!match) throw new Error(`missing ${name}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}

@@ -91,6 +91,15 @@ require_literal "INCUS_WEB_PROVISIONER_INCUS_GROUP="
 require_literal "INCUS_WEB_PROVISIONER_NODE="
 require_literal "INCUS_WEB_APP_NPM="
 require_literal "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD="
+require_literal "ENABLE_BUILD_WORKER="
+require_literal "validate_build_worker_node_version"
+require_literal "install_build_worker_server"
+require_literal "write_build_worker_env"
+require_literal "incus-web-build-worker.service"
+require_literal "EnvironmentFile=\$INCUS_WEB_BUILD_WORKER_ENV_FILE"
+require_literal "ExecStart=\$INCUS_WEB_PROVISIONER_NODE \$INCUS_WEB_BUILD_WORKER_INSTALL_PATH"
+require_literal "http://localhost/readyz"
+require_literal "build worker did not become healthy"
 require_literal "ENABLE_CODEX_APP_SERVER="
 require_literal "INCUS_WEB_CODEX_APP_SERVER_USER="
 require_literal "INCUS_WEB_CODEX_APP_SERVER_HOST="
@@ -242,6 +251,12 @@ for needle in \
 	  "INCUS_WEB_PROVISIONER_SOCKET_MODE=0660" \
 	  "INCUS_WEB_PROVISIONER_GROUP=incus-web" \
 	  "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=0" \
+	  "ENABLE_BUILD_WORKER=0" \
+	  "INCUS_WEB_BUILD_WORKER_SOCKET=/run/incus-web/build-worker.sock" \
+	  "INCUS_WEB_BUILD_WORKER_MAX_LOG_CHUNK_BYTES=262144" \
+	  "INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD=20971520" \
+	  "INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS=100" \
+	  "INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS=" \
 	  "ENABLE_CODEX_APP_SERVER=1" \
 	  "INCUS_WEB_CODEX_APP_SERVER_HOST=127.0.0.1" \
 	  "INCUS_WEB_CODEX_APP_SERVER_PORT=4500" \

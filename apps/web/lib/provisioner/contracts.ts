@@ -10,6 +10,10 @@ export const PROVISIONER_COMMAND_TYPES = [
   "DispatchAgentRun",
   "ListAgentRuns",
   "SetWorkspaceLimits",
+  "SetWorkspaceMount",
+  "ClearWorkspaceMount",
+  "CreateWorkspaceSnapshot",
+  "ListWorkspaceSnapshots",
   "ImportGoldenConfig",
 ] as const;
 
@@ -23,6 +27,9 @@ export const PROVISIONER_COMMAND_TYPES = [
 // a build error, not a silent runtime gap.
 export const MUTATING_COMMAND_TYPES = [
   "SetWorkspaceLimits",
+  "SetWorkspaceMount",
+  "ClearWorkspaceMount",
+  "CreateWorkspaceSnapshot",
   "ImportGoldenConfig",
 ] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
 
@@ -107,6 +114,24 @@ export type ProvisionerErrorCode =
   | "operation_failed"
   | "golden_config_failed";
 
+const PROVISIONER_ERROR_CODES = [
+  "invalid_input",
+  "unauthenticated_service",
+  "mutation_not_authorized",
+  "metadata_mismatch",
+  "invalid_state",
+  "template_unavailable",
+  "incus_unavailable",
+  "zfs_unavailable",
+  "quota_failed",
+  "setup_failed",
+  "missing_controller_config",
+  "not_implemented",
+  "timeout",
+  "operation_failed",
+  "golden_config_failed",
+] as const satisfies readonly ProvisionerErrorCode[];
+
 export type ProvisionerError = {
   code: ProvisionerErrorCode;
   message: string;
@@ -144,6 +169,16 @@ export type WorkspaceRuntimeStatus = {
   state: ProvisionerWorkspaceState;
   incusProject: IncusProjectName;
   incusContainer: IncusContainerName;
+  image?: string;
+  storagePool?: string;
+  networkBridge?: string;
+  workspaceHostPath?: string;
+  workspaceMountPath?: string;
+  effectiveLimits?: {
+    cpu?: string;
+    memory?: string;
+    processes?: string;
+  };
   cpuCount?: number;
   memoryUsedBytes?: number;
   memoryLimitBytes?: number;
@@ -175,6 +210,22 @@ export type RestartWorkspacePayload = {
 export type SetWorkspaceLimitsPayload = {
   cpu?: string;
   memory?: string;
+};
+
+export type SetWorkspaceMountPayload = {
+  hostPath: string;
+};
+
+export type ClearWorkspaceMountPayload = Record<string, never>;
+export type CreateWorkspaceSnapshotPayload = {
+  name?: string;
+};
+export type ListWorkspaceSnapshotsPayload = Record<string, never>;
+
+export type WorkspaceSnapshot = {
+  name: string;
+  createdAt?: string;
+  stateful: boolean;
 };
 
 // The zip itself is staged to disk by the API route (see
@@ -277,6 +328,16 @@ export type LifecycleWorkspaceResult = {
 };
 
 export type SetWorkspaceLimitsResult = LifecycleWorkspaceResult;
+export type SetWorkspaceMountResult = LifecycleWorkspaceResult;
+export type ClearWorkspaceMountResult = LifecycleWorkspaceResult;
+export type CreateWorkspaceSnapshotResult = {
+  workspaceId: WorkspaceId;
+  snapshot: WorkspaceSnapshot;
+};
+export type ListWorkspaceSnapshotsResult = {
+  workspaceId: WorkspaceId;
+  snapshots: WorkspaceSnapshot[];
+};
 
 export type ImportGoldenConfigResult = {
   workspaceId: WorkspaceId;
@@ -311,6 +372,10 @@ export type ProvisionerCommandPayloadMap = {
   DispatchAgentRun: DispatchAgentRunPayload;
   ListAgentRuns: ListAgentRunsPayload;
   SetWorkspaceLimits: SetWorkspaceLimitsPayload;
+  SetWorkspaceMount: SetWorkspaceMountPayload;
+  ClearWorkspaceMount: ClearWorkspaceMountPayload;
+  CreateWorkspaceSnapshot: CreateWorkspaceSnapshotPayload;
+  ListWorkspaceSnapshots: ListWorkspaceSnapshotsPayload;
   ImportGoldenConfig: ImportGoldenConfigPayload;
 };
 
@@ -324,6 +389,10 @@ export type ProvisionerCommandResultMap = {
   DispatchAgentRun: DispatchAgentRunResult;
   ListAgentRuns: ListAgentRunsResult;
   SetWorkspaceLimits: SetWorkspaceLimitsResult;
+  SetWorkspaceMount: SetWorkspaceMountResult;
+  ClearWorkspaceMount: ClearWorkspaceMountResult;
+  CreateWorkspaceSnapshot: CreateWorkspaceSnapshotResult;
+  ListWorkspaceSnapshots: ListWorkspaceSnapshotsResult;
   ImportGoldenConfig: ImportGoldenConfigResult;
 };
 
@@ -359,10 +428,7 @@ export type ProvisionerOperation<
 export function isProvisionerCommandType(
   value: unknown,
 ): value is ProvisionerCommandType {
-  return (
-    typeof value === "string" &&
-    PROVISIONER_COMMAND_TYPES.includes(value as ProvisionerCommandType)
-  );
+  return isKnownString(value, PROVISIONER_COMMAND_TYPES);
 }
 
 export function validateGeneratedName(
@@ -623,6 +689,26 @@ export function validateWorkspaceRuntimeStatus(
     return invalid("setupPhase is invalid");
   }
   if (
+    !hasOptionalString(status.image) ||
+    !hasOptionalString(status.storagePool) ||
+    !hasOptionalString(status.networkBridge) ||
+    !hasOptionalString(status.workspaceHostPath) ||
+    !hasOptionalString(status.workspaceMountPath)
+  ) {
+    return invalid("workspace status metadata is invalid");
+  }
+  if (status.effectiveLimits !== undefined) {
+    if (
+      !isRecord(status.effectiveLimits) ||
+      !hasOnlyKeys(status.effectiveLimits, ["cpu", "memory", "processes"]) ||
+      !hasOptionalString(status.effectiveLimits.cpu) ||
+      !hasOptionalString(status.effectiveLimits.memory) ||
+      !hasOptionalString(status.effectiveLimits.processes)
+    ) {
+      return invalid("workspace status effective limits are invalid");
+    }
+  }
+  if (
     !hasOptionalNonNegativeNumber(status.cpuCount) ||
     !hasOptionalNonNegativeNumber(status.memoryUsedBytes) ||
     !hasOptionalNonNegativeNumber(status.memoryLimitBytes) ||
@@ -793,6 +879,14 @@ function validateCommandPayload(
       return validateListAgentRunsPayload(payload);
     case "SetWorkspaceLimits":
       return validateSetWorkspaceLimitsPayload(payload);
+    case "SetWorkspaceMount":
+      return validateSetWorkspaceMountPayload(payload);
+    case "ClearWorkspaceMount":
+      return validateEmptyPayload(payload);
+    case "CreateWorkspaceSnapshot":
+      return validateCreateWorkspaceSnapshotPayload(payload);
+    case "ListWorkspaceSnapshots":
+      return validateEmptyPayload(payload);
     case "ImportGoldenConfig":
       return validateImportGoldenConfigPayload(payload);
   }
@@ -898,6 +992,49 @@ function validateSetWorkspaceLimitsPayload(
   return { ok: true, value: payload as SetWorkspaceLimitsPayload };
 }
 
+function validateSetWorkspaceMountPayload(
+  payload: unknown,
+): ValidationResult<SetWorkspaceMountPayload> {
+  if (!isRecord(payload)) {
+    return invalid("SetWorkspaceMount payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["hostPath"])) {
+    return invalid("SetWorkspaceMount payload contains unsupported fields");
+  }
+  if (
+    typeof payload.hostPath !== "string" ||
+    payload.hostPath.length === 0 ||
+    payload.hostPath.length > 1024 ||
+    !payload.hostPath.startsWith("/") ||
+    payload.hostPath.includes("\0")
+  ) {
+    return invalid("hostPath must be an absolute host path");
+  }
+  return { ok: true, value: payload as SetWorkspaceMountPayload };
+}
+
+const SNAPSHOT_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,62}$/i;
+
+function validateCreateWorkspaceSnapshotPayload(
+  payload: unknown,
+): ValidationResult<CreateWorkspaceSnapshotPayload> {
+  if (!isRecord(payload)) {
+    return invalid("CreateWorkspaceSnapshot payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["name"])) {
+    return invalid("CreateWorkspaceSnapshot payload contains unsupported fields");
+  }
+  if (
+    payload.name !== undefined &&
+    (typeof payload.name !== "string" ||
+      !SNAPSHOT_NAME_PATTERN.test(payload.name) ||
+      payload.name.includes(".."))
+  ) {
+    return invalid("snapshot name must be 1-63 letters, numbers, dots, dashes, or underscores");
+  }
+  return { ok: true, value: payload as CreateWorkspaceSnapshotPayload };
+}
+
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 
 function validateImportGoldenConfigPayload(
@@ -952,10 +1089,58 @@ function validateOperationResult(
     case "ListAgentRuns":
       return validateListAgentRunsResult(result, workspace);
     case "SetWorkspaceLimits":
+    case "SetWorkspaceMount":
+    case "ClearWorkspaceMount":
       return validateLifecycleWorkspaceResult(result, workspace, undefined, false);
+    case "CreateWorkspaceSnapshot":
+      return validateCreateWorkspaceSnapshotResult(result, workspace);
+    case "ListWorkspaceSnapshots":
+      return validateListWorkspaceSnapshotsResult(result, workspace);
     case "ImportGoldenConfig":
       return validateImportGoldenConfigResult(result, workspace);
   }
+}
+
+function validateCreateWorkspaceSnapshotResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<CreateWorkspaceSnapshotResult> {
+  if (!isRecord(result)) {
+    return invalid("CreateWorkspaceSnapshot result must be an object");
+  }
+  if (result.workspaceId !== workspace.id) {
+    return metadataMismatch("CreateWorkspaceSnapshot result workspace did not match request");
+  }
+  if (!isWorkspaceSnapshot(result.snapshot)) {
+    return invalid("CreateWorkspaceSnapshot result snapshot is invalid");
+  }
+  return { ok: true, value: result as CreateWorkspaceSnapshotResult };
+}
+
+function validateListWorkspaceSnapshotsResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<ListWorkspaceSnapshotsResult> {
+  if (!isRecord(result)) {
+    return invalid("ListWorkspaceSnapshots result must be an object");
+  }
+  if (result.workspaceId !== workspace.id) {
+    return metadataMismatch("ListWorkspaceSnapshots result workspace did not match request");
+  }
+  if (!Array.isArray(result.snapshots) || !result.snapshots.every(isWorkspaceSnapshot)) {
+    return invalid("ListWorkspaceSnapshots result snapshots are invalid");
+  }
+  return { ok: true, value: result as ListWorkspaceSnapshotsResult };
+}
+
+function isWorkspaceSnapshot(value: unknown): value is WorkspaceSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    (value.createdAt === undefined || isIsoTimestamp(value.createdAt)) &&
+    typeof value.stateful === "boolean"
+  );
 }
 
 function validateImportGoldenConfigResult(
@@ -1144,6 +1329,10 @@ function hasOptionalCheckStatus(value: unknown): boolean {
   );
 }
 
+function hasOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
 function isAllowedGithubHttpsRepo(value: string): boolean {
   const match = value.match(
     /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/,
@@ -1178,49 +1367,31 @@ function isAgeIdentity(value: string): boolean {
 }
 
 function isWorkspaceState(value: unknown): value is ProvisionerWorkspaceState {
-  return (
-    typeof value === "string" &&
-    PROVISIONER_WORKSPACE_STATES.includes(value as ProvisionerWorkspaceState)
-  );
+  return isKnownString(value, PROVISIONER_WORKSPACE_STATES);
 }
 
 function isProvisionerSetupPhase(
   value: unknown,
 ): value is ProvisionerSetupPhase {
-  return (
-    typeof value === "string" &&
-    PROVISIONER_SETUP_PHASES.includes(value as ProvisionerSetupPhase)
-  );
+  return isKnownString(value, PROVISIONER_SETUP_PHASES);
 }
 
 function isAgentRunAgent(value: unknown): value is AgentRunAgent {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_AGENTS.includes(value as AgentRunAgent)
-  );
+  return isKnownString(value, AGENT_RUN_AGENTS);
 }
 
 function isAgentRunContainerState(
   value: unknown,
 ): value is AgentRunContainerState {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_CONTAINER_STATES.includes(value as AgentRunContainerState)
-  );
+  return isKnownString(value, AGENT_RUN_CONTAINER_STATES);
 }
 
 function isAgentRunPhase(value: unknown): value is AgentRunPhase {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_PHASES.includes(value as AgentRunPhase)
-  );
+  return isKnownString(value, AGENT_RUN_PHASES);
 }
 
 function isAgentRunStatus(value: unknown): value is AgentRunStatus {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_STATUSES.includes(value as AgentRunStatus)
-  );
+  return isKnownString(value, AGENT_RUN_STATUSES);
 }
 
 function isAgentRunContainer(value: unknown): value is AgentRunContainer {
@@ -1242,7 +1413,7 @@ function isAgentRunContainer(value: unknown): value is AgentRunContainer {
 function isAgentRunController(value: unknown): value is AgentRunController {
   return (
     isRecord(value) &&
-    AGENT_CONTROLLER_KINDS.includes(value.kind as AgentControllerKind) &&
+    isKnownString(value.kind, AGENT_CONTROLLER_KINDS) &&
     (value.sessionId === undefined || typeof value.sessionId === "string") &&
     (value.turnId === undefined || typeof value.turnId === "string") &&
     (value.url === undefined || typeof value.url === "string")
@@ -1264,10 +1435,7 @@ function validateIncusInstanceName(value: string): boolean {
 }
 
 function isOperationStatus(value: unknown): value is OperationStatus {
-  return (
-    typeof value === "string" &&
-    OPERATION_STATUSES.includes(value as OperationStatus)
-  );
+  return isKnownString(value, OPERATION_STATUSES);
 }
 
 function isProvisionerError(value: unknown): value is ProvisionerError {
@@ -1282,23 +1450,7 @@ function isProvisionerError(value: unknown): value is ProvisionerError {
 }
 
 function isProvisionerErrorCode(value: unknown): value is ProvisionerErrorCode {
-  return (
-    value === "invalid_input" ||
-    value === "unauthenticated_service" ||
-    value === "mutation_not_authorized" ||
-    value === "metadata_mismatch" ||
-    value === "invalid_state" ||
-    value === "template_unavailable" ||
-    value === "incus_unavailable" ||
-    value === "zfs_unavailable" ||
-    value === "quota_failed" ||
-    value === "setup_failed" ||
-    value === "missing_controller_config" ||
-    value === "not_implemented" ||
-    value === "timeout" ||
-    value === "operation_failed" ||
-    value === "golden_config_failed"
-  );
+  return isKnownString(value, PROVISIONER_ERROR_CODES);
 }
 
 function hasOptionalNonNegativeNumber(value: unknown): boolean {
@@ -1360,6 +1512,13 @@ function sanitizeRecord(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isKnownString<const TValues extends readonly string[]>(
+  value: unknown,
+  values: TValues,
+): value is TValues[number] {
+  return typeof value === "string" && values.includes(value);
 }
 
 function hasOnlyKeys(

@@ -16,6 +16,9 @@ import {
 } from "@/lib/workspaces/route-helpers";
 import type { ActorContext } from "@/lib/workspaces/types";
 import type { ProvisionerOperation } from "@/lib/provisioner/contracts";
+import { appendTelemetry } from "@/lib/workspaces/state-store";
+
+export const runtime = "nodejs";
 
 type RouteContext = {
   params: Promise<{
@@ -34,7 +37,6 @@ const inFlightStatusRequests = new Map<
   string,
   Promise<ProvisionerOperation<"GetWorkspaceStatus">>
 >();
-
 function cachedWorkspaceStatus(actor: ActorContext, workspaceId: string) {
   const existing = inFlightStatusRequests.get(workspaceId);
   if (existing) return existing;
@@ -79,5 +81,40 @@ export async function GET(_request: Request, context: RouteContext) {
   }
 
   const workspace = statusToWorkspace(operation.result, access.workspace.ownerUserId);
-  return Response.json({ ok: true, workspace });
+  let history;
+  try {
+    history = appendTelemetrySample(workspaceId, workspace);
+  } catch (error) {
+    return Response.json(
+      {
+        ok: false,
+        error: {
+          code: "workspace_state_unavailable",
+          message: error instanceof Error ? error.message : "workspace state database unavailable",
+        },
+      },
+      { status: 503 },
+    );
+  }
+  return Response.json({ ok: true, workspace, history });
+}
+
+function appendTelemetrySample(
+  workspaceId: string,
+  workspace: ReturnType<typeof statusToWorkspace>,
+) {
+  const memoryPercent = percentOf(
+    workspace.metrics.memoryUsedBytes,
+    workspace.metrics.memoryLimitBytes,
+  );
+  const cpuPercent = percentOf(
+    workspace.metrics.loadAverage?.[0],
+    workspace.metrics.cpuCount,
+  );
+  return appendTelemetry(workspaceId, { cpuPercent, memoryPercent });
+}
+
+function percentOf(value: number | undefined, total: number | undefined) {
+  if (value === undefined || total === undefined || total <= 0) return undefined;
+  return Math.min(100, Math.round((value / total) * 100));
 }

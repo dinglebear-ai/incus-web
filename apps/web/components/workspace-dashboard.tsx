@@ -5,12 +5,9 @@ import {
   CheckCircle2Icon,
   CircleGaugeIcon,
   DatabaseIcon,
-  FingerprintIcon,
-  FolderGit2Icon,
   GitBranchIcon,
   SlidersHorizontalIcon,
   ShieldCheckIcon,
-  SignalIcon,
   TerminalIcon,
   UserRoundIcon,
   XIcon,
@@ -33,7 +30,9 @@ import {
 import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { AgentRunDispatch } from "@/components/agent-run-dispatch";
+import { BuilderPanel } from "@/components/builder-panel";
 import { GoldenConfigImport } from "@/components/golden-config-import";
+import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
 import {
   isLiveState,
@@ -53,6 +52,8 @@ import type {
 
 const ICON_STORAGE =
   '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>';
+const WORKSPACE_TABS = ["containers", "builder", "config"] as const;
+type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 function stateTone(state: WorkspaceState) {
   if (state === "running") return "success";
@@ -314,7 +315,7 @@ function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
         error={error}
         live={live}
       />
-      <WorkspaceInspector workspace={workspace} />
+      <WorkspaceDetailsPanel workspace={workspace} />
     </div>
   );
 }
@@ -499,86 +500,6 @@ function DetailChip({
   );
 }
 
-function formatLoadAverage(loadAverage: Workspace["metrics"]["loadAverage"]) {
-  if (!loadAverage) return "unknown";
-  return loadAverage.map((value) => value.toFixed(2)).join(" / ");
-}
-
-function WorkspaceInspector({ workspace }: { workspace: Workspace }) {
-  const terminalRoute = workspace.terminalUrl ?? "Not exposed";
-
-  return (
-    <aside className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <SectionLabel icon={FolderGit2Icon} tone="rose">
-          Details
-        </SectionLabel>
-        <div className="flex flex-wrap justify-end gap-2">
-          <DetailChip
-            icon={ShieldCheckIcon}
-            label="Gate"
-            value="Authelia"
-            tone="success"
-          />
-          <DetailChip
-            icon={FingerprintIcon}
-            label="Privilege"
-            value="unprivileged"
-          />
-          <DetailChip
-            icon={SignalIcon}
-            label="Signal rule"
-            value="enabled"
-            tone="success"
-          />
-          <DetailChip
-            icon={DatabaseIcon}
-            label="Setup"
-            value={setupPhaseLabel(workspace.setup.phase)}
-            tone={workspace.setup.phase === "ready" ? "success" : "warn"}
-          />
-        </div>
-      </div>
-
-      <DescriptionList className="mt-3 bg-transparent">
-        <DescriptionItem
-          label="Image"
-          value={workspace.templateVersion}
-          active
-        />
-        <DescriptionItem label="Profile" value={workspace.resourceProfileId} />
-        <DescriptionItem
-          label="Load average"
-          value={formatLoadAverage(workspace.metrics.loadAverage)}
-        />
-        <DescriptionItem
-          label="Terminal"
-          value={
-            <span className="aurora-text-code text-[var(--aurora-accent-pink-strong)]">
-              {terminalRoute}
-            </span>
-          }
-        />
-        <DescriptionItem
-          label="Dotfiles"
-          value={workspace.setup.dotfilesStatus}
-          active={workspace.setup.dotfilesStatus === "ok"}
-        />
-      </DescriptionList>
-
-      <div className="mt-3 border-t border-[var(--aurora-border-default)] pt-3">
-        {workspace.accessNote ? (
-          <p className="aurora-text-body-sm text-[var(--aurora-text-muted)]">
-            {workspace.accessNote}
-          </p>
-        ) : (
-          <p className="aurora-text-meta">Shared access is off by default.</p>
-        )}
-      </div>
-    </aside>
-  );
-}
-
 function EmptyAccessState({ inventory }: { inventory: WorkspaceInventory }) {
   if (inventory.provisionerError) {
     return (
@@ -624,7 +545,11 @@ export function WorkspaceDashboard({
 }: {
   inventory: WorkspaceInventory;
 }) {
-  const primaryWorkspace = inventory.workspaces[0];
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(
+    inventory.workspaces[0]?.id,
+  );
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("containers");
+  const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
 
   return (
     <main className="aurora-page-shell min-h-screen text-[var(--aurora-text-primary)]">
@@ -676,12 +601,54 @@ export function WorkspaceDashboard({
 
         <section className="grid gap-4">
           {inventory.workspaces.length > 0 ? (
-            inventory.workspaces.map((workspace) => (
-              <WorkspacePane
-                key={`${workspace.id}:${workspace.createdAt}`}
-                workspace={workspace}
-              />
-            ))
+            <>
+              <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+                <nav className="space-y-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-3">
+                  {inventory.workspaces.map((workspace) => (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      className={`w-full rounded-[4px] border px-3 py-2 text-left aurora-text-ui ${
+                        workspace.id === primaryWorkspace?.id
+                          ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)]"
+                          : "border-[var(--aurora-border-default)]"
+                      }`}
+                      onClick={() => setActiveWorkspaceId(workspace.id)}
+                    >
+                      {workspace.name}
+                    </button>
+                  ))}
+                </nav>
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    {WORKSPACE_TABS.map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        className={`rounded-[4px] border px-3 py-2 aurora-text-ui ${
+                          activeTab === tab
+                            ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)]"
+                            : "border-[var(--aurora-border-default)]"
+                        }`}
+                        onClick={() => setActiveTab(tab)}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+                  {activeTab === "containers" && primaryWorkspace ? (
+                    <WorkspacePane
+                      key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                      workspace={primaryWorkspace}
+                    />
+                  ) : null}
+                  {activeTab === "builder" ? <BuilderPanel /> : null}
+                  {activeTab === "config" && primaryWorkspace ? (
+                    <ReadOnlyConfig workspace={primaryWorkspace} />
+                  ) : null}
+                </div>
+              </div>
+            </>
           ) : (
             <EmptyAccessState inventory={inventory} />
           )}
@@ -689,5 +656,25 @@ export function WorkspaceDashboard({
 
       </div>
     </main>
+  );
+}
+
+function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
+  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+}
+
+function ReadOnlyConfig({ workspace }: { workspace: Workspace }) {
+  return (
+    <section className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4">
+      <SectionLabel icon={SlidersHorizontalIcon}>Config</SectionLabel>
+      <DescriptionList className="mt-3 bg-transparent">
+        <DescriptionItem label="Access mode" value={workspace.terminalUrl ? "configured" : "pending"} active={Boolean(workspace.terminalUrl)} />
+        <DescriptionItem label="Network bridge" value={workspace.networkBridge ?? "unknown"} />
+        <DescriptionItem label="Resource profile" value={workspace.resourceProfileId} />
+        <DescriptionItem label="CPU limit" value={workspace.resources.effectiveCpu ?? "profile default"} />
+        <DescriptionItem label="Memory limit" value={workspace.resources.effectiveMemory ?? "profile default"} />
+        <DescriptionItem label="Workspace host path" value={workspace.workspaceHostPath ?? "profile default"} />
+      </DescriptionList>
+    </section>
   );
 }

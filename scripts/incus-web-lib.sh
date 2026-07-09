@@ -559,6 +559,21 @@ ensure_host_node() {
 }
 
 validate_host_node_version() {
+  if [[ -n "${INCUS_WEB_WORKSPACE_STATE_DB:-}" || -n "${INCUS_WEB_WORKSPACE_STATE_DB_PATH:-}" ]]; then
+    validate_node_min_version 22 5 "host web app requires Node.js >=22.5.0 for persistent workspace state via node:sqlite"
+    return
+  fi
+  validate_node_min_version 20 9 "host web app requires Node.js >=20.9.0 for Next.js 16"
+}
+
+validate_build_worker_node_version() {
+  validate_node_min_version 22 5 "build worker requires Node.js >=22.5.0 for node:sqlite"
+}
+
+validate_node_min_version() {
+  local min_major="$1"
+  local min_minor="$2"
+  local requirement="$3"
   local version
   local major
   local minor
@@ -568,8 +583,8 @@ validate_host_node_version() {
   minor="${version#*.}"
   minor="${minor%%.*}"
   [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || die "failed to parse host Node.js version from $INCUS_WEB_PROVISIONER_NODE --version"
-  if (( major < 20 || (major == 20 && minor < 9) )); then
-    die "host web app requires Node.js >=20.9.0 for Next.js 16; $INCUS_WEB_PROVISIONER_NODE is v$version"
+  if (( major < min_major || (major == min_major && minor < min_minor) )); then
+    die "$requirement; $INCUS_WEB_PROVISIONER_NODE is v$version"
   fi
 }
 
@@ -622,6 +637,26 @@ install_host_provisioner_service_auth_module() {
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 }
 
+install_build_worker_server() {
+  local source_file="$INCUS_WEB_BUILD_WORKER_SERVER"
+  local tmp_file=""
+  local install_dir
+
+  if [[ ! -f "$source_file" ]]; then
+    [[ "$ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD" == "1" ]] || die "build worker server is missing locally; set ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1 to fetch it from INCUS_WEB_BUILD_WORKER_SERVER_URL"
+    [[ "$INCUS_WEB_BUILD_WORKER_SERVER_URL" == https://* ]] || die "INCUS_WEB_BUILD_WORKER_SERVER_URL must use https://"
+    tmp_file="$(mktemp)"
+    curl --proto '=https' --tlsv1.2 -fsSL "$INCUS_WEB_BUILD_WORKER_SERVER_URL" -o "$tmp_file"
+    source_file="$tmp_file"
+  fi
+
+  install_dir="$(dirname "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH")"
+  sudo_cmd install -d -m 755 "$install_dir"
+  sudo_cmd install -m 755 "$source_file" "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH"
+  [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
+  install_host_provisioner_service_auth_module
+}
+
 install_host_provisioner_agent_runs_module() {
   local source_file="$INCUS_WEB_PROVISIONER_AGENT_RUNS"
   local tmp_file=""
@@ -672,6 +707,27 @@ ensure_golden_config_staging_dir() {
     "$INCUS_WEB_GOLDEN_CONFIG_DIR"
 }
 
+ensure_build_worker_identity() {
+  getent group "$INCUS_WEB_PROVISIONER_GROUP" >/dev/null 2>&1 || sudo_cmd groupadd --system "$INCUS_WEB_PROVISIONER_GROUP"
+  getent group "$INCUS_WEB_PROVISIONER_INCUS_GROUP" >/dev/null 2>&1 || die "Incus access group does not exist: $INCUS_WEB_PROVISIONER_INCUS_GROUP"
+
+  if ! id -u "$INCUS_WEB_BUILD_WORKER_USER" >/dev/null 2>&1; then
+    sudo_cmd useradd --system \
+      --home-dir "$INCUS_WEB_BUILD_WORKER_STATE_DIR" \
+      --create-home \
+      --shell /usr/sbin/nologin \
+      --gid "$INCUS_WEB_PROVISIONER_GROUP" \
+      --groups "$INCUS_WEB_PROVISIONER_INCUS_GROUP" \
+      "$INCUS_WEB_BUILD_WORKER_USER"
+  else
+    sudo_cmd usermod -aG "$INCUS_WEB_PROVISIONER_GROUP,$INCUS_WEB_PROVISIONER_INCUS_GROUP" "$INCUS_WEB_BUILD_WORKER_USER"
+  fi
+  sudo_cmd install -d -m 2750 \
+    -o "$INCUS_WEB_BUILD_WORKER_USER" \
+    -g "$INCUS_WEB_PROVISIONER_GROUP" \
+    "$INCUS_WEB_BUILD_WORKER_STATE_DIR"
+}
+
 ensure_host_provisioner_token() {
   local token_file="$INCUS_WEB_PROVISIONER_TOKEN_FILE"
   local token_dir
@@ -698,6 +754,36 @@ ensure_host_provisioner_token() {
   tmp_file="$(mktemp)"
   chmod 600 "$tmp_file"
   printf '%s\n' "$INCUS_WEB_PROVISIONER_TOKEN" >"$tmp_file"
+  sudo_cmd install -m 640 -g "$INCUS_WEB_PROVISIONER_GROUP" "$tmp_file" "$token_file"
+  rm -f "$tmp_file"
+}
+
+ensure_build_worker_token() {
+  local token_file="$INCUS_WEB_BUILD_WORKER_TOKEN_FILE"
+  local token_dir
+  local tmp_file
+
+  if [[ -n "${INCUS_WEB_BUILD_WORKER_TOKEN:-}" ]]; then
+    validate_systemd_env_value INCUS_WEB_BUILD_WORKER_TOKEN "$INCUS_WEB_BUILD_WORKER_TOKEN"
+    return
+  fi
+
+  token_dir="$(dirname "$token_file")"
+  sudo_cmd install -d -m 750 -g "$INCUS_WEB_PROVISIONER_GROUP" "$token_dir"
+  if sudo_cmd test -s "$token_file"; then
+    INCUS_WEB_BUILD_WORKER_TOKEN="$(sudo_cmd cat "$token_file")"
+    export INCUS_WEB_BUILD_WORKER_TOKEN
+    sudo_cmd chgrp "$INCUS_WEB_PROVISIONER_GROUP" "$token_file"
+    sudo_cmd chmod 640 "$token_file"
+    return
+  fi
+
+  INCUS_WEB_BUILD_WORKER_TOKEN="$(head -c 48 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  validate_systemd_env_value INCUS_WEB_BUILD_WORKER_TOKEN "$INCUS_WEB_BUILD_WORKER_TOKEN"
+  export INCUS_WEB_BUILD_WORKER_TOKEN
+  tmp_file="$(mktemp)"
+  chmod 600 "$tmp_file"
+  printf '%s\n' "$INCUS_WEB_BUILD_WORKER_TOKEN" >"$tmp_file"
   sudo_cmd install -m 640 -g "$INCUS_WEB_PROVISIONER_GROUP" "$tmp_file" "$token_file"
   rm -f "$tmp_file"
 }
@@ -1068,6 +1154,15 @@ write_host_web_app_env() {
   validate_systemd_env_value INCUS_WEB_WORKSPACE_OWNER_MODE "$INCUS_WEB_WORKSPACE_OWNER_MODE"
   validate_systemd_env_value INCUS_WEB_ALLOW_SHARED_PROTOTYPE "$INCUS_WEB_ALLOW_SHARED_PROTOTYPE"
   validate_systemd_env_value INCUS_WEB_GOLDEN_CONFIG_DIR "$INCUS_WEB_GOLDEN_CONFIG_DIR"
+  validate_env_file_value INCUS_WEB_WORKSPACE_STATE_DB "$INCUS_WEB_WORKSPACE_STATE_DB"
+  if [[ "${ENABLE_BUILD_WORKER:-0}" == "1" ]]; then
+    validate_systemd_env_value INCUS_WEB_BUILD_WORKER_TOKEN "$INCUS_WEB_BUILD_WORKER_TOKEN"
+    validate_systemd_env_value INCUS_WEB_BUILD_WORKER_SOCKET "$INCUS_WEB_BUILD_WORKER_SOCKET"
+    validate_systemd_env_value INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS "${INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS:-0}"
+    if [[ -n "${INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS:-}" ]]; then
+      validate_env_file_value INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS "$INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS"
+    fi
+  fi
   if [[ -n "$INCUS_WEB_TERMINAL_URL" ]]; then
     validate_env_file_value INCUS_WEB_TERMINAL_URL "$INCUS_WEB_TERMINAL_URL"
   fi
@@ -1086,6 +1181,15 @@ write_host_web_app_env() {
     printf 'INCUS_WEB_WORKSPACE_OWNER_MODE=%s\n' "$INCUS_WEB_WORKSPACE_OWNER_MODE"
     printf 'INCUS_WEB_ALLOW_SHARED_PROTOTYPE=%s\n' "$INCUS_WEB_ALLOW_SHARED_PROTOTYPE"
     printf 'INCUS_WEB_GOLDEN_CONFIG_DIR=%s\n' "$INCUS_WEB_GOLDEN_CONFIG_DIR"
+    printf 'INCUS_WEB_WORKSPACE_STATE_DB=%s\n' "$INCUS_WEB_WORKSPACE_STATE_DB"
+    if [[ "${ENABLE_BUILD_WORKER:-0}" == "1" ]]; then
+      printf 'INCUS_WEB_BUILD_WORKER_TOKEN=%s\n' "$INCUS_WEB_BUILD_WORKER_TOKEN"
+      printf 'INCUS_WEB_BUILD_WORKER_SOCKET=%s\n' "$INCUS_WEB_BUILD_WORKER_SOCKET"
+      printf 'INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS=%s\n' "${INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS:-0}"
+      if [[ -n "${INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS:-}" ]]; then
+        printf 'INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS=%s\n' "$INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS"
+      fi
+    fi
     if [[ -n "$INCUS_WEB_TERMINAL_URL" ]]; then
       printf 'INCUS_WEB_TERMINAL_URL=%s\n' "$INCUS_WEB_TERMINAL_URL"
     fi
@@ -1097,6 +1201,122 @@ write_host_web_app_env() {
   sudo_cmd install -d -m 750 -g "$INCUS_WEB_PROVISIONER_GROUP" "$(dirname "$INCUS_WEB_APP_ENV_FILE")"
   sudo_cmd install -m 640 -g "$INCUS_WEB_PROVISIONER_GROUP" "$tmp_file" "$INCUS_WEB_APP_ENV_FILE"
   rm -f "$tmp_file"
+}
+
+write_build_worker_env() {
+  local tmp_file
+
+  validate_systemd_env_value INCUS_WEB_BUILD_WORKER_TOKEN "$INCUS_WEB_BUILD_WORKER_TOKEN"
+  validate_systemd_env_value INCUS_WEB_BUILD_WORKER_SOCKET "$INCUS_WEB_BUILD_WORKER_SOCKET"
+  validate_systemd_env_value INCUS_WEB_BUILD_WORKER_SOCKET_MODE "$INCUS_WEB_BUILD_WORKER_SOCKET_MODE"
+  validate_env_file_value INCUS_WEB_BUILD_WORKER_STATE_DIR "$INCUS_WEB_BUILD_WORKER_STATE_DIR"
+  for name in \
+    INCUS_WEB_BUILD_WORKER_MAX_LOG_CHUNK_BYTES \
+    INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD \
+    INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS \
+    INCUS_WEB_BUILD_WORKER_MAX_STDERR_TAIL_BYTES; do
+    if [[ -n "${!name:-}" ]]; then
+      validate_systemd_env_value "$name" "${!name}"
+    fi
+  done
+
+  tmp_file="$(mktemp)"
+  chmod 600 "$tmp_file"
+  {
+    printf 'INCUS_WEB_BUILD_WORKER_TOKEN=%s\n' "$INCUS_WEB_BUILD_WORKER_TOKEN"
+    printf 'INCUS_WEB_BUILD_WORKER_SOCKET=%s\n' "$INCUS_WEB_BUILD_WORKER_SOCKET"
+    printf 'INCUS_WEB_BUILD_WORKER_SOCKET_MODE=%s\n' "$INCUS_WEB_BUILD_WORKER_SOCKET_MODE"
+    printf 'INCUS_WEB_BUILD_WORKER_STATE_DIR=%s\n' "$INCUS_WEB_BUILD_WORKER_STATE_DIR"
+    printf 'INCUS_WEB_BUILD_WORKER_DB=%s\n' "$INCUS_WEB_BUILD_WORKER_STATE_DIR/builds.sqlite3"
+    printf 'INCUS_WEB_BUILD_WORKER_WORK_DIR=%s\n' "$INCUS_WEB_BUILD_WORKER_STATE_DIR/work"
+    for name in \
+      INCUS_WEB_BUILD_WORKER_MAX_LOG_CHUNK_BYTES \
+      INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD \
+      INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS \
+      INCUS_WEB_BUILD_WORKER_MAX_STDERR_TAIL_BYTES; do
+      if [[ -n "${!name:-}" ]]; then
+        printf '%s=%s\n' "$name" "${!name}"
+      fi
+    done
+  } >"$tmp_file"
+
+  sudo_cmd install -d -m 750 -g "$INCUS_WEB_PROVISIONER_GROUP" "$(dirname "$INCUS_WEB_BUILD_WORKER_ENV_FILE")"
+  sudo_cmd install -m 640 -g "$INCUS_WEB_PROVISIONER_GROUP" "$tmp_file" "$INCUS_WEB_BUILD_WORKER_ENV_FILE"
+  rm -f "$tmp_file"
+}
+
+wait_for_build_worker() {
+  for _ in {1..30}; do
+    if sudo_cmd systemctl is-active --quiet incus-web-build-worker &&
+      sudo_cmd curl -fsS --max-time 10 --unix-socket "$INCUS_WEB_BUILD_WORKER_SOCKET" http://localhost/readyz >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+
+  sudo_cmd journalctl -u incus-web-build-worker -n 80 --no-pager >&2 || true
+  die "build worker did not become healthy"
+}
+
+configure_build_worker() {
+  local tmp_unit
+
+  if [[ "$ENABLE_BUILD_WORKER" != "1" ]]; then
+    if have systemctl; then
+      sudo_cmd systemctl disable --now incus-web-build-worker >/dev/null 2>&1 || true
+    fi
+    return
+  fi
+
+  ensure_host_provisioner_systemd
+  ensure_host_node
+  validate_build_worker_node_version
+  ensure_build_worker_identity
+  install_build_worker_server
+  ensure_build_worker_token
+  write_build_worker_env
+
+  tmp_unit="$(mktemp)"
+  cat >"$tmp_unit" <<EOF
+[Unit]
+Description=incus-web image build worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$INCUS_WEB_BUILD_WORKER_USER
+Group=$INCUS_WEB_PROVISIONER_GROUP
+SupplementaryGroups=$INCUS_WEB_PROVISIONER_INCUS_GROUP
+Environment=HOME=$INCUS_WEB_BUILD_WORKER_STATE_DIR
+EnvironmentFile=$INCUS_WEB_BUILD_WORKER_ENV_FILE
+RuntimeDirectory=incus-web
+RuntimeDirectoryMode=0750
+StateDirectory=incus-web/build-worker
+StateDirectoryMode=0750
+UMask=0077
+ExecStart=$INCUS_WEB_PROVISIONER_NODE $INCUS_WEB_BUILD_WORKER_INSTALL_PATH
+Restart=always
+RestartSec=2
+# distrobuilder uses newuidmap/newgidmap during image creation; do not set
+# NoNewPrivileges or RestrictSUIDSGID on this service.
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/run/incus-web $INCUS_WEB_BUILD_WORKER_STATE_DIR
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo_cmd install -m 644 "$tmp_unit" /etc/systemd/system/incus-web-build-worker.service
+  rm -f "$tmp_unit"
+  sudo_cmd systemctl daemon-reload
+  sudo_cmd systemctl enable incus-web-build-worker
+  sudo_cmd systemctl restart incus-web-build-worker
+  wait_for_build_worker
+  log "build worker: incus-web-build-worker via $INCUS_WEB_BUILD_WORKER_SOCKET"
 }
 
 wait_for_host_provisioner() {

@@ -51,6 +51,9 @@ export type WorkspaceResources = {
   cpu: string;
   memory: string;
   storage: string;
+  effectiveCpu?: string;
+  effectiveMemory?: string;
+  effectiveProcesses?: string;
 };
 
 // Raw numeric metrics behind the formatted `WorkspaceResources` strings above.
@@ -74,6 +77,11 @@ export type Workspace = {
   slug: string;
   incusProject: string;
   incusContainer: string;
+  image?: string;
+  storagePool?: string;
+  networkBridge?: string;
+  workspaceHostPath?: string;
+  workspaceMountPath?: string;
   templateVersion: string;
   state: WorkspaceState;
   resourceProfileId: ResourceProfileId;

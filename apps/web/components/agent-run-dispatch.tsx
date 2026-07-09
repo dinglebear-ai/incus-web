@@ -49,9 +49,7 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
   const [selectedRunId, setSelectedRunId] = React.useState<string>();
   const sessionPanelRef = React.useRef<HTMLDivElement>(null);
 
-  const active = runs.some(
-    (run) => run.status === "queued" || run.status === "running",
-  );
+  const active = runs.some(isRunLive);
   const selectedRun = selectedRunId
     ? runs.find((run) => run.id === selectedRunId)
     : undefined;
@@ -129,6 +127,9 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
             body?.error?.message ??
             "failed to dispatch agent run",
         );
+      }
+      if (!body.run || typeof body.run.id !== "string") {
+        throw new Error("agent run response was invalid");
       }
       setRuns((current) => [
         body.run,
@@ -347,7 +348,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
   }
 
   const outputEntries = runOutputEntries(run);
-  const live = run.status === "queued" || run.status === "running";
+  const live = isRunLive(run);
 
   return (
     <div className="flex min-h-0 flex-col bg-[color-mix(in_srgb,var(--aurora-page-bg)_68%,var(--aurora-panel-medium))]">
@@ -394,55 +395,15 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
               <ClockIcon aria-hidden="true" className="size-3.5" />
               <span className="aurora-text-meta">Run log</span>
             </div>
-            <ol className="max-h-80 min-h-56 overflow-auto rounded-[4px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5">
-              {outputEntries.length > 0 ? (
-                outputEntries.map((entry, index) => (
-                  <li
-                    key={`${entry.at}-${index}`}
-                    className="grid gap-1 border-b border-[var(--aurora-border-default)] py-2 last:border-b-0 first:pt-0 last:pb-0 md:grid-cols-[9rem_4.5rem_minmax(0,1fr)]"
-                  >
-                    <span className="aurora-text-code text-[var(--aurora-text-muted)]">
-                      {formatTime(entry.at)}
-                    </span>
-                    <span className="aurora-text-code text-[var(--aurora-text-muted)]">
-                      {entry.level}
-                    </span>
-                    <span className="whitespace-pre-wrap break-words text-[var(--aurora-text-primary)]">
-                      {entry.message}
-                    </span>
-                  </li>
-                ))
-              ) : (
-                <li className="text-[var(--aurora-text-muted)]">No run log yet</li>
-              )}
-            </ol>
+            <RunLogList
+              entries={outputEntries}
+              className="max-h-80 min-h-56"
+              rowClassName="md:grid-cols-[9rem_4.5rem_minmax(0,1fr)]"
+            />
           </div>
         </div>
 
-        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body md:grid-cols-2">
-          <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
-          <RunDetail
-            label="Container"
-            value={`${run.container.project}/${run.container.name}`}
-          />
-          <RunDetail
-            label="Source"
-            value={`${run.container.sourceProject}/${run.container.sourceContainer}`}
-          />
-          <RunDetail label="Container state" value={run.container.state} />
-          <RunDetail label="Controller" value={controllerLabel(run)} />
-          {run.controller?.url ? (
-            <RunDetail label="Controller URL" value={run.controller.url} />
-          ) : null}
-          {run.controller?.turnId ? (
-            <RunDetail label="Turn" value={run.controller.turnId} />
-          ) : null}
-          <RunDetail label="Created" value={formatDate(run.createdAt)} />
-          <RunDetail label="Updated" value={formatDate(run.updatedAt)} />
-          {run.completedAt ? (
-            <RunDetail label="Completed" value={formatDate(run.completedAt)} />
-          ) : null}
-        </dl>
+        <RunDetailsList run={run} className="md:grid-cols-2" />
       </div>
     </div>
   );
@@ -456,7 +417,7 @@ export function AgentRunFullSessionViewer({
   autoTail?: boolean;
 }) {
   const outputEntries = runOutputEntries(run);
-  const live = run.status === "queued" || run.status === "running";
+  const live = isRunLive(run);
   const tailRef = React.useRef<HTMLLIElement>(null);
 
   React.useEffect(() => {
@@ -509,57 +470,98 @@ export function AgentRunFullSessionViewer({
               </span>
             </div>
             <ol className="min-h-0 flex-1 overflow-auto rounded-b-[4px] border-x border-b border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5">
-              {outputEntries.length > 0 ? (
-                outputEntries.map((entry, index) => (
-                  <li
-                    key={`${entry.at}-${index}`}
-                    className="grid gap-2 border-b border-[var(--aurora-border-default)] py-2 last:border-b-0 first:pt-0 last:pb-0 lg:grid-cols-[9rem_5rem_minmax(0,1fr)]"
-                  >
-                    <span className="aurora-text-code text-[var(--aurora-text-muted)]">
-                      {formatTime(entry.at)}
-                    </span>
-                    <span className="aurora-text-code text-[var(--aurora-text-muted)]">
-                      {entry.level}
-                    </span>
-                    <span className="whitespace-pre-wrap break-words text-[var(--aurora-text-primary)]">
-                      {entry.message}
-                    </span>
-                  </li>
-                ))
-              ) : (
-                <li className="text-[var(--aurora-text-muted)]">No run log yet</li>
-              )}
+              <RunLogEntries
+                entries={outputEntries}
+                rowClassName="gap-2 lg:grid-cols-[9rem_5rem_minmax(0,1fr)]"
+              />
               <li ref={tailRef} aria-hidden="true" className="h-px" />
             </ol>
           </div>
         </div>
 
-        <dl className="grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body sm:grid-cols-2 xl:grid-cols-1">
-          <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
-          <RunDetail
-            label="Container"
-            value={`${run.container.project}/${run.container.name}`}
-          />
-          <RunDetail
-            label="Source"
-            value={`${run.container.sourceProject}/${run.container.sourceContainer}`}
-          />
-          <RunDetail label="Container state" value={run.container.state} />
-          <RunDetail label="Controller" value={controllerLabel(run)} />
-          {run.controller?.url ? (
-            <RunDetail label="Controller URL" value={run.controller.url} />
-          ) : null}
-          {run.controller?.turnId ? (
-            <RunDetail label="Turn" value={run.controller.turnId} />
-          ) : null}
-          <RunDetail label="Created" value={formatDate(run.createdAt)} />
-          <RunDetail label="Updated" value={formatDate(run.updatedAt)} />
-          {run.completedAt ? (
-            <RunDetail label="Completed" value={formatDate(run.completedAt)} />
-          ) : null}
-        </dl>
+        <RunDetailsList run={run} className="sm:grid-cols-2 xl:grid-cols-1" />
       </div>
     </section>
+  );
+}
+
+function RunLogList({
+  entries,
+  className,
+  rowClassName,
+}: {
+  entries: RunLogEntry[];
+  className: string;
+  rowClassName: string;
+}) {
+  return (
+    <ol className={`${className} overflow-auto rounded-[4px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5`}>
+      <RunLogEntries entries={entries} rowClassName={`gap-1 ${rowClassName}`} />
+    </ol>
+  );
+}
+
+function RunLogEntries({
+  entries,
+  rowClassName,
+}: {
+  entries: RunLogEntry[];
+  rowClassName: string;
+}) {
+  if (entries.length === 0) {
+    return <li className="text-[var(--aurora-text-muted)]">No run log yet</li>;
+  }
+
+  return entries.map((entry, index) => (
+    <li
+      key={`${entry.at}-${index}`}
+      className={`grid border-b border-[var(--aurora-border-default)] py-2 last:border-b-0 first:pt-0 last:pb-0 ${rowClassName}`}
+    >
+      <span className="aurora-text-code text-[var(--aurora-text-muted)]">
+        {formatTime(entry.at)}
+      </span>
+      <span className="aurora-text-code text-[var(--aurora-text-muted)]">
+        {entry.level}
+      </span>
+      <span className="whitespace-pre-wrap break-words text-[var(--aurora-text-primary)]">
+        {entry.message}
+      </span>
+    </li>
+  ));
+}
+
+function RunDetailsList({
+  run,
+  className,
+}: {
+  run: AgentRun;
+  className: string;
+}) {
+  return (
+    <dl className={`grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body ${className}`}>
+      <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
+      <RunDetail
+        label="Container"
+        value={`${run.container.project}/${run.container.name}`}
+      />
+      <RunDetail
+        label="Source"
+        value={`${run.container.sourceProject}/${run.container.sourceContainer}`}
+      />
+      <RunDetail label="Container state" value={run.container.state} />
+      <RunDetail label="Controller" value={controllerLabel(run)} />
+      {run.controller?.url ? (
+        <RunDetail label="Controller URL" value={run.controller.url} />
+      ) : null}
+      {run.controller?.turnId ? (
+        <RunDetail label="Turn" value={run.controller.turnId} />
+      ) : null}
+      <RunDetail label="Created" value={formatDate(run.createdAt)} />
+      <RunDetail label="Updated" value={formatDate(run.updatedAt)} />
+      {run.completedAt ? (
+        <RunDetail label="Completed" value={formatDate(run.completedAt)} />
+      ) : null}
+    </dl>
   );
 }
 
@@ -661,6 +663,10 @@ function toneForStatus(status: AgentRun["status"]) {
   if (status === "failed") return "error";
   if (status === "running") return "warn";
   return "neutral";
+}
+
+function isRunLive(run: AgentRun) {
+  return run.status === "queued" || run.status === "running";
 }
 
 function formatDate(value: string) {
