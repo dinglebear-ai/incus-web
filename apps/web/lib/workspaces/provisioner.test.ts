@@ -809,16 +809,76 @@ describe("workspace inventory provisioner", () => {
     expect(operation.status).toBe("succeeded");
   });
 
-  it("treats no real command type as mutating yet (Phase 0 ships the gate mechanism, not a populated registry)", () => {
-    // Pins the current, intentional state: MUTATING_COMMAND_TYPES in
-    // contracts.ts has no resource-limit/mount command yet, so
-    // isMutatingCommandType must be false for every real command type. When
-    // Phase 1 adds SetWorkspaceLimits (or similar) to that array, this test
-    // should be updated alongside that change — if it starts failing
-    // unexpectedly, something added an entry without a corresponding
-    // contract/command update, or vice versa.
+  it("routes SetWorkspaceLimits through the mutation gate for real", async () => {
+    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
+    );
+    const client = { send: vi.fn() };
+
+    const operation = await sendWorkspaceCommand(
+      actor,
+      "SetWorkspaceLimits",
+      { cpu: "2" },
+      client,
+    );
+
+    expect(client.send).not.toHaveBeenCalled();
+    expect(operation).toMatchObject({
+      type: "SetWorkspaceLimits",
+      status: "failed",
+      error: { code: "mutation_not_authorized" },
+    });
+  });
+
+  it("allows SetWorkspaceLimits through the mutation gate with the explicit opt-in", async () => {
+    vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
+    vi.stubEnv("INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION", "1");
+    const actor = getActorFromHeaders(
+      authHeaders({ email: "jacob@example.com", subject: "jacob" }),
+    );
+    const client = {
+      send: vi.fn().mockResolvedValue({
+        id: "op-limits-1",
+        requestId: actor.requestId,
+        type: "SetWorkspaceLimits",
+        workspaceId: "workspace-incus-web",
+        status: "succeeded",
+        result: {
+          workspaceId: "workspace-incus-web",
+          state: "running",
+        },
+      }),
+    };
+
+    const operation = await sendWorkspaceCommand(
+      actor,
+      "SetWorkspaceLimits",
+      { cpu: "2" },
+      client,
+    );
+
+    expect(client.send).toHaveBeenCalled();
+    expect(operation.status).toBe("succeeded");
+  });
+
+  it("no longer needs a stand-in command type for the mutation-gate pinning test", () => {
+    // SetWorkspaceLimits is now a real, permanent entry in
+    // MUTATING_COMMAND_TYPES -- update the Phase 0 pinning test's
+    // expectation accordingly (see the next step in this task).
+    expect(isMutatingCommandType("SetWorkspaceLimits")).toBe(true);
+  });
+
+  it("treats exactly SetWorkspaceLimits as mutating today", () => {
+    // Pins the current state: MUTATING_COMMAND_TYPES in contracts.ts
+    // contains exactly SetWorkspaceLimits. When a future command (e.g.
+    // SetWorkspaceMount, Phase 3) is added to that array, this test
+    // should be updated alongside that change.
     for (const type of PROVISIONER_COMMAND_TYPES) {
-      expect(isMutatingCommandType(type)).toBe(false);
+      const expected = type === "SetWorkspaceLimits";
+      expect(isMutatingCommandType(type)).toBe(expected);
     }
   });
 });
