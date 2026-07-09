@@ -38,6 +38,12 @@ import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { AgentRunDispatch } from "@/components/agent-run-dispatch";
 import { WorkspaceActions } from "@/components/workspace-actions";
+import {
+  MetricBar,
+  Sparkline,
+  TelemetryFreshness,
+  useWorkspaceTelemetry,
+} from "@/components/workspace-telemetry";
 import type {
   CheckStatus,
   SetupPhase,
@@ -46,10 +52,6 @@ import type {
   WorkspaceState,
 } from "@/lib/workspaces/types";
 
-const ICON_CPU =
-  '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>';
-const ICON_MEMORY =
-  '<path d="M6 19v-3"/><path d="M10 19v-3"/><path d="M14 19v-3"/><path d="M18 19v-3"/><path d="M8 11V9"/><path d="M16 11V9"/><path d="M12 11V9"/><path d="M2 15h20"/><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8H2Z"/>';
 const ICON_STORAGE =
   '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>';
 
@@ -319,7 +321,41 @@ function SectionLabel({
   );
 }
 
-function WorkspaceCard({ workspace }: { workspace: Workspace }) {
+function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
+  const { workspace, history, lastUpdated, polling, error } =
+    useWorkspaceTelemetry(seed);
+  const live = isLiveWorkspaceState(workspace.state);
+
+  return (
+    <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <WorkspaceCard
+        workspace={workspace}
+        history={history}
+        lastUpdated={lastUpdated}
+        polling={polling}
+        error={error}
+        live={live}
+      />
+      <WorkspaceInspector workspace={workspace} />
+    </div>
+  );
+}
+
+function WorkspaceCard({
+  workspace,
+  history,
+  lastUpdated,
+  polling,
+  error,
+  live,
+}: {
+  workspace: Workspace;
+  history: { at: number; cpuPercent?: number; memoryPercent?: number }[];
+  lastUpdated: number;
+  polling: boolean;
+  error?: string;
+  live: boolean;
+}) {
   return (
     <Card
       accent={false}
@@ -360,32 +396,14 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
       </CardHeader>
 
       <CardContent className="space-y-5 p-4">
-        <StatGrid>
-          <StatCard
-            compact
-            icon={ICON_CPU}
-            label="CPU"
-            value={metricValue(workspace.resources.cpu)}
-            tone="info"
-            style={{ borderRadius: 4, boxShadow: "none" }}
-          />
-          <StatCard
-            compact
-            icon={ICON_MEMORY}
-            label="Memory"
-            value={metricValue(workspace.resources.memory)}
-            tone="success"
-            style={{ borderRadius: 4, boxShadow: "none" }}
-          />
-          <StatCard
-            compact
-            icon={ICON_STORAGE}
-            label="Storage"
-            value={metricValue(workspace.resources.storage)}
-            tone="warn"
-            style={{ borderRadius: 4, boxShadow: "none" }}
-          />
-        </StatGrid>
+        <WorkspaceTelemetryPanel
+          workspace={workspace}
+          history={history}
+          lastUpdated={lastUpdated}
+          polling={polling}
+          error={error}
+          live={live}
+        />
 
         <WorkspaceFeatures workspace={workspace} />
         <AgentRunDispatch workspace={workspace} />
@@ -393,6 +411,89 @@ function WorkspaceCard({ workspace }: { workspace: Workspace }) {
         <SetupProgressPanel workspace={workspace} />
       </CardContent>
     </Card>
+  );
+}
+
+function isLiveWorkspaceState(state: WorkspaceState) {
+  return (
+    state === "running" ||
+    state === "starting" ||
+    state === "restarting" ||
+    state === "setting_up" ||
+    state === "degraded"
+  );
+}
+
+function WorkspaceTelemetryPanel({
+  workspace,
+  history,
+  lastUpdated,
+  polling,
+  error,
+  live,
+}: {
+  workspace: Workspace;
+  history: { at: number; cpuPercent?: number; memoryPercent?: number }[];
+  lastUpdated: number;
+  polling: boolean;
+  error?: string;
+  live: boolean;
+}) {
+  const cpuPercent = history.at(-1)?.cpuPercent;
+  const memoryPercent = history.at(-1)?.memoryPercent;
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <SectionLabel icon={CircleGaugeIcon}>Live telemetry</SectionLabel>
+        <TelemetryFreshness
+          lastUpdated={lastUpdated}
+          polling={polling}
+          live={live}
+        />
+      </div>
+      {error ? (
+        <p className="aurora-text-meta text-[var(--aurora-error)]">{error}</p>
+      ) : null}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+          <MetricBar
+            label="CPU (load avg)"
+            usedLabel={workspace.resources.cpu}
+            percentValue={cpuPercent}
+            tone="info"
+          />
+          <Sparkline
+            history={history}
+            metric="cpuPercent"
+            tone="var(--aurora-accent-primary)"
+          />
+        </div>
+        <div className="space-y-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+          <MetricBar
+            label="Memory"
+            usedLabel={workspace.resources.memory}
+            percentValue={memoryPercent}
+            tone="success"
+          />
+          <Sparkline
+            history={history}
+            metric="memoryPercent"
+            tone="var(--aurora-success)"
+          />
+        </div>
+      </div>
+      <StatGrid>
+        <StatCard
+          compact
+          icon={ICON_STORAGE}
+          label="Storage"
+          value={metricValue(workspace.resources.storage)}
+          tone="warn"
+          style={{ borderRadius: 4, boxShadow: "none" }}
+        />
+      </StatGrid>
+    </section>
   );
 }
 
@@ -427,6 +528,11 @@ function DetailChip({
       </span>
     </span>
   );
+}
+
+function formatLoadAverage(loadAverage: Workspace["metrics"]["loadAverage"]) {
+  if (!loadAverage) return "unknown";
+  return loadAverage.map((value) => value.toFixed(2)).join(" / ");
 }
 
 function WorkspaceInspector({ workspace }: { workspace: Workspace }) {
@@ -472,6 +578,10 @@ function WorkspaceInspector({ workspace }: { workspace: Workspace }) {
           active
         />
         <DescriptionItem label="Profile" value={workspace.resourceProfileId} />
+        <DescriptionItem
+          label="Load average"
+          value={formatLoadAverage(workspace.metrics.loadAverage)}
+        />
         <DescriptionItem
           label="Terminal"
           value={
@@ -598,13 +708,10 @@ export function WorkspaceDashboard({
         <section className="grid gap-4">
           {inventory.workspaces.length > 0 ? (
             inventory.workspaces.map((workspace) => (
-              <div
+              <WorkspacePane
                 key={`${workspace.id}:${workspace.createdAt}`}
-                className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_300px]"
-              >
-                <WorkspaceCard workspace={workspace} />
-                <WorkspaceInspector workspace={workspace} />
-              </div>
+                workspace={workspace}
+              />
             ))
           ) : (
             <EmptyAccessState inventory={inventory} />

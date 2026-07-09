@@ -53,6 +53,20 @@ export type WorkspaceResources = {
   storage: string;
 };
 
+// Raw numeric metrics behind the formatted `WorkspaceResources` strings above.
+// Kept separate (rather than replacing the formatted fields) so existing
+// consumers of `resources.cpu`/`memory`/`storage` are unaffected; the
+// dashboard's live telemetry view uses these for progress bars and
+// sparklines, which need actual numbers rather than pre-formatted text.
+export type WorkspaceMetrics = {
+  cpuCount?: number;
+  memoryUsedBytes?: number;
+  memoryLimitBytes?: number;
+  rootDiskUsedBytes?: number;
+  rootDiskLimitBytes?: number;
+  loadAverage?: [number, number, number];
+};
+
 export type Workspace = {
   id: WorkspaceId;
   ownerUserId: UserId;
@@ -64,6 +78,7 @@ export type Workspace = {
   state: WorkspaceState;
   resourceProfileId: ResourceProfileId;
   resources: WorkspaceResources;
+  metrics: WorkspaceMetrics;
   setup: WorkspaceSetupSummary;
   terminalUrl?: string;
   accessNote?: string;
