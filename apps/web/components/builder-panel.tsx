@@ -118,7 +118,7 @@ export function BuilderPanel() {
   }
 
   async function savePreset() {
-    await fetch("/api/builds", {
+    const response = await fetch("/api/builds", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -130,6 +130,11 @@ export function BuilderPanel() {
         postInstallCommands: postInstall.split("\n").map((entry) => entry.trim()).filter(Boolean),
       }),
     });
+    const body = await response.json().catch(() => undefined);
+    if (!response.ok || body?.ok !== true) {
+      setMessage(body?.operation?.error?.message ?? body?.error?.message ?? "preset save failed");
+      return;
+    }
     setMessage("Preset saved");
     void refreshRegistry();
   }

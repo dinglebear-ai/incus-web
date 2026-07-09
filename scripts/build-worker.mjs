@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readlink, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
@@ -421,7 +421,10 @@ async function acquireLock() {
   try {
     await symlink(String(process.pid), lockPath);
   } catch {
-    throw new Error("another image build is already running");
+    if (!(await removeStaleLock())) {
+      throw new Error("another image build is already running");
+    }
+    await symlink(String(process.pid), lockPath);
   }
 }
 
@@ -429,29 +432,118 @@ async function releaseLock() {
   await unlink(lockPath).catch(() => {});
 }
 
+async function removeStaleLock() {
+  let pidText;
+  try {
+    pidText = await readlink(lockPath);
+  } catch {
+    return false;
+  }
+  const pid = Number.parseInt(pidText, 10);
+  if (Number.isInteger(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (err) {
+      if (err?.code !== "ESRCH") return false;
+    }
+  }
+  await unlink(lockPath).catch(() => {});
+  return true;
+}
+
 function validateCommand(command) {
   if (!command || typeof command !== "object") return error("invalid_input", "command must be an object");
   if (command.version !== "build-worker.v1") return error("invalid_input", "unsupported build worker version");
+  if (!string(command.requestId, 160)) return error("invalid_input", "requestId is required");
+  if (!isCommandType(command.type)) return error("invalid_input", "unsupported command type");
   if (!command.actor || typeof command.actor.userId !== "string" || typeof command.actor.email !== "string") {
     return error("invalid_input", "actor is invalid");
   }
   if (!command.payload || typeof command.payload !== "object") return error("invalid_input", "payload is invalid");
   const payload = command.payload;
-  if (command.type === "DispatchBuildImage") {
-    if (
-      !validAlias(payload.imageAlias) ||
-      !string(payload.definitionYaml, 200000) ||
-      !string(payload.idempotencyKey, 160) ||
-      !Array.isArray(payload.packages) ||
-      !Array.isArray(payload.postInstallCommands)
-    ) {
-      return error("invalid_input", "DispatchBuildImage payload is invalid");
-    }
+
+  switch (command.type) {
+    case "DispatchBuildImage":
+      return validateDispatchPayload(payload);
+    case "GetBuildStatus":
+      return validateGetStatusPayload(payload);
+    case "ListBuildImages":
+    case "ListBuildPresets":
+      return hasOnlyKeys(payload, []) ? undefined : error("invalid_input", "payload contains unsupported fields");
+    case "SetBuildImageMaster":
+      return hasOnlyKeys(payload, ["imageAlias"]) && validAlias(payload.imageAlias)
+        ? undefined
+        : error("invalid_input", "SetBuildImageMaster payload is invalid");
+    case "SaveBuildPreset":
+      return validateSavePresetPayload(payload);
   }
-  if (command.type === "GetBuildStatus" && (!string(payload.buildId, 80) || !Number.isInteger(payload.logOffset))) {
+  return undefined;
+}
+
+function validateDispatchPayload(payload) {
+  if (
+    !hasOnlyKeys(payload, [
+      "distro",
+      "release",
+      "packages",
+      "postInstallCommands",
+      "definitionYaml",
+      "imageAlias",
+      "idempotencyKey",
+      "basedOn",
+    ])
+  ) {
+    return error("invalid_input", "DispatchBuildImage payload contains unsupported fields");
+  }
+  if (
+    !string(payload.distro, 40) ||
+    !string(payload.release, 80) ||
+    !string(payload.definitionYaml, 200000) ||
+    !validAlias(payload.imageAlias) ||
+    !string(payload.idempotencyKey, 160) ||
+    !arrayOfStrings(payload.packages, 200, 100) ||
+    !arrayOfStrings(payload.postInstallCommands, 50, 20000) ||
+    (payload.basedOn !== undefined && !validAlias(payload.basedOn))
+  ) {
+    return error("invalid_input", "DispatchBuildImage payload is invalid");
+  }
+  return undefined;
+}
+
+function validateGetStatusPayload(payload) {
+  if (!hasOnlyKeys(payload, ["buildId", "logOffset"])) {
+    return error("invalid_input", "GetBuildStatus payload contains unsupported fields");
+  }
+  if (!string(payload.buildId, 80) || !Number.isInteger(payload.logOffset) || payload.logOffset < 0) {
     return error("invalid_input", "GetBuildStatus payload is invalid");
   }
   return undefined;
+}
+
+function validateSavePresetPayload(payload) {
+  if (
+    !hasOnlyKeys(payload, ["name", "distro", "release", "packages", "postInstallCommands"]) ||
+    !string(payload.name, 80) ||
+    !string(payload.distro, 40) ||
+    !string(payload.release, 80) ||
+    !arrayOfStrings(payload.packages, 200, 100) ||
+    !arrayOfStrings(payload.postInstallCommands, 50, 20000)
+  ) {
+    return error("invalid_input", "SaveBuildPreset payload is invalid");
+  }
+  return undefined;
+}
+
+function isCommandType(value) {
+  return [
+    "DispatchBuildImage",
+    "GetBuildStatus",
+    "ListBuildImages",
+    "SetBuildImageMaster",
+    "ListBuildPresets",
+    "SaveBuildPreset",
+  ].includes(value);
 }
 
 function validAlias(value) {
@@ -460,6 +552,19 @@ function validAlias(value) {
 
 function string(value, max) {
   return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function arrayOfStrings(value, maxItems, maxLength) {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((entry) => typeof entry === "string" && entry.length <= maxLength)
+  );
+}
+
+function hasOnlyKeys(value, keys) {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function operation(command, status, resultOrError) {

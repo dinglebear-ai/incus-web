@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { createHash } from "node:crypto";
 
 import { BUILD_WORKER_CONTRACT_VERSION, type BuildWorkerCommand } from "@/lib/build-worker/contracts";
 import { sendBuildWorkerCommand } from "@/lib/build-worker/client";
@@ -26,12 +27,11 @@ export async function POST(request: Request) {
   if (action === "dispatch") {
     const parsed = dispatchPayload(body);
     if (!parsed.ok) return jsonError("invalid_build", parsed.message, 400);
-    const definitionYaml = renderDistrobuilderYaml(parsed.value);
     const operation = await sendBuildWorkerCommand(
       command("DispatchBuildImage", actor.actor, {
         ...parsed.value,
-        definitionYaml,
-        imageAlias: parsed.imageAlias,
+        definitionYaml: parsed.definitionYaml,
+        imageAlias: imageAliasForActor(actor.actor, parsed.requestedAlias),
         idempotencyKey: parsed.idempotencyKey,
         basedOn: parsed.basedOn,
       }),
@@ -100,15 +100,27 @@ function dispatchPayload(body: Record<string, unknown>) {
     packages: stringArray(body.packages),
     postInstallCommands: stringArray(body.postInstallCommands),
   };
-  const imageAlias = stringField(body.imageAlias, `incus-web-${value.distro}-${value.release}-${Date.now()}`);
+  const requestedAlias = stringField(body.imageAlias, `${value.distro}-${value.release}-${Date.now()}`);
   const idempotencyKey = stringField(body.idempotencyKey, crypto.randomUUID());
   const basedOn = body.basedOn === undefined ? undefined : stringField(body.basedOn, "");
+  let definitionYaml;
   try {
-    renderDistrobuilderYaml(value);
+    definitionYaml = renderDistrobuilderYaml(value);
   } catch (error) {
     return { ok: false as const, message: error instanceof Error ? error.message : "invalid definition" };
   }
-  return { ok: true as const, value, imageAlias, idempotencyKey, basedOn };
+  return { ok: true as const, value, definitionYaml, requestedAlias, idempotencyKey, basedOn };
+}
+
+function imageAliasForActor(actor: { userId: string }, requestedAlias: string) {
+  const owner = createHash("sha256").update(actor.userId).digest("hex").slice(0, 12);
+  const alias = requestedAlias
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 80) || "custom";
+  return `incus-web-${owner}-${alias}`.slice(0, 119);
 }
 
 function stringField(value: unknown, fallback: string) {

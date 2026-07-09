@@ -1272,12 +1272,12 @@ UMask=0077
 ExecStart=$INCUS_WEB_PROVISIONER_NODE $INCUS_WEB_BUILD_WORKER_INSTALL_PATH
 Restart=always
 RestartSec=2
-NoNewPrivileges=true
+# distrobuilder uses newuidmap/newgidmap during image creation; do not set
+# NoNewPrivileges or RestrictSUIDSGID on this service.
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
 ReadWritePaths=/run/incus-web $INCUS_WEB_BUILD_WORKER_STATE_DIR
-RestrictSUIDSGID=true
 LockPersonality=true
 
 [Install]
