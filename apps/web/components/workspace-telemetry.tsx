@@ -56,17 +56,27 @@ function isLiveState(state: Workspace["state"]) {
 export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
   const [workspace, setWorkspace] = React.useState(initial);
   const [history, setHistory] = React.useState<Sample[]>(() => [
-    sampleFrom(initial),
+    sampleFrom(initial, Date.now()),
   ]);
   const [lastUpdated, setLastUpdated] = React.useState(() => Date.now());
   const [polling, setPolling] = React.useState(false);
   const [error, setError] = React.useState<string>();
 
-  React.useEffect(() => {
+  // Re-seed local state when the identity of the workspace we're tracking
+  // changes (e.g. switching panes), without a setState-in-effect cascade:
+  // adjust state directly during render per
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  // `lastUpdated` is intentionally left alone here (render must stay pure —
+  // no `Date.now()`) and instead re-anchors itself off the next poll tick,
+  // which fires within POLL_INTERVAL_MS of the reset.
+  const [trackedWorkspaceId, setTrackedWorkspaceId] = React.useState(
+    initial.id,
+  );
+  if (initial.id !== trackedWorkspaceId) {
+    setTrackedWorkspaceId(initial.id);
     setWorkspace(initial);
-    setHistory([sampleFrom(initial)]);
-    setLastUpdated(Date.now());
-  }, [initial.id]);
+    setHistory([sampleFrom(initial, 0)]);
+  }
 
   const poll = React.useCallback(async () => {
     setPolling(true);
@@ -81,11 +91,12 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
         );
       }
       const next = body.workspace as Workspace;
+      const polledAt = Date.now();
       setWorkspace(next);
       setHistory((current) =>
-        [...current, sampleFrom(next)].slice(-HISTORY_LENGTH),
+        [...current, sampleFrom(next, polledAt)].slice(-HISTORY_LENGTH),
       );
-      setLastUpdated(Date.now());
+      setLastUpdated(polledAt);
       setError(undefined);
     } catch (pollError) {
       setError(
@@ -107,9 +118,9 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
   return { workspace, history, lastUpdated, polling, error };
 }
 
-function sampleFrom(workspace: Workspace): Sample {
+function sampleFrom(workspace: Workspace, at: number): Sample {
   return {
-    at: Date.now(),
+    at,
     cpuPercent: loadPercent(workspace.metrics),
     memoryPercent: percent(
       workspace.metrics.memoryUsedBytes,
@@ -127,15 +138,15 @@ export function TelemetryFreshness({
   polling: boolean;
   live: boolean;
 }) {
-  const [, forceTick] = React.useState(0);
+  const [now, setNow] = React.useState(() => Date.now());
 
   React.useEffect(() => {
     if (!live) return;
-    const timer = window.setInterval(() => forceTick((tick) => tick + 1), 1000);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [live]);
 
-  const secondsAgo = Math.max(0, Math.round((Date.now() - lastUpdated) / 1000));
+  const secondsAgo = Math.max(0, Math.round((now - lastUpdated) / 1000));
   const label = !live
     ? "not polling"
     : polling
