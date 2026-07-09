@@ -27,6 +27,14 @@ jobs:
       - name: Install OpenWiki
         run: npm install --global openwiki
 
+      - name: Connect to tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci
+          version: latest
+
       - name: Run OpenWiki
         run: openwiki --update --print
         env:
@@ -34,7 +42,13 @@ jobs:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           OPENWIKI_PROVIDER: openai-compatible
           OPENAI_COMPATIBLE_API_KEY: ${{ secrets.OPENAI_COMPATIBLE_API_KEY }}
-          OPENAI_COMPATIBLE_BASE_URL: https://cli-api.tootie.tv/v1
+          # Reach the API directly over the tailnet instead of the public
+          # cli-api.tootie.tv hostname -- that path is Cloudflare-proxied and
+          # Cloudflare's bot protection challenges GitHub Actions' runner IPs
+          # before the request ever reaches SWAG/Authelia. Going straight to
+          # the tootie tailnet IP + backend port bypasses Cloudflare, SWAG,
+          # and Authelia entirely for this CI-only call.
+          OPENAI_COMPATIBLE_BASE_URL: http://100.120.242.29:8317/v1
           OPENWIKI_MODEL_ID: gpt-5.3-codex-spark
 
       - name: Create OpenWiki update pull request
