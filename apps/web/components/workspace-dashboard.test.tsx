@@ -113,6 +113,25 @@ describe("WorkspaceDashboard", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("respects a prior dismissal stored in localStorage without a hydration mismatch", async () => {
+    const workspace = inventory.workspaces[0];
+    window.localStorage.setItem(
+      `incus-web:setup-complete-dismissed:${workspace.id}:${workspace.createdAt}`,
+      "true",
+    );
+
+    render(<WorkspaceDashboard inventory={inventory} />);
+
+    // Initial render must start dismissed=false (matching what SSR would
+    // produce) and only flip to dismissed after the post-mount effect reads
+    // localStorage -- never synchronously from a useState initializer.
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Setup: complete", { selector: "p" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("shows setup details while provisioning is not complete", () => {
     render(
       <WorkspaceDashboard

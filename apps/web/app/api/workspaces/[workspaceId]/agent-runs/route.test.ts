@@ -20,9 +20,12 @@ const workspace = {
 
 const sendWorkspaceCommand = vi.fn();
 const getWorkspaceRefForActor = vi.fn();
+const headersMock = vi.fn(
+  async () => new Headers({ "x-auth-request-email": "test@example.com" }),
+);
 
 vi.mock("next/headers", () => ({
-  headers: vi.fn(async () => new Headers({ "x-auth-request-email": "test@example.com" })),
+  headers: () => headersMock(),
 }));
 
 vi.mock("@/lib/workspaces/provisioner", () => ({
@@ -34,6 +37,29 @@ describe("agent-runs route", () => {
   beforeEach(() => {
     getWorkspaceRefForActor.mockReturnValue({ ok: true, workspace });
     sendWorkspaceCommand.mockReset();
+    headersMock.mockResolvedValue(
+      new Headers({ "x-auth-request-email": "test@example.com" }),
+    );
+  });
+
+  it("rejects requests missing a matching trusted proxy secret before calling the provisioner", async () => {
+    // A missing/mismatched proxy secret is an identity failure that's
+    // independent of NODE_ENV/dev-identity fallback, so it's the reliable
+    // way to exercise the route's 401 mapping at this layer without
+    // fighting the dev-identity escape hatch.
+    vi.stubEnv("INCUS_WEB_TRUSTED_PROXY_SECRET", "shh");
+    headersMock.mockResolvedValue(
+      new Headers({ "x-auth-request-email": "test@example.com" }),
+    );
+
+    const response = await GET(new Request("http://localhost/api"), {
+      params: Promise.resolve({ workspaceId: workspace.id }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(sendWorkspaceCommand).not.toHaveBeenCalled();
+
+    vi.unstubAllEnvs();
   });
 
   it("rejects invalid dispatch bodies before calling the provisioner", async () => {
