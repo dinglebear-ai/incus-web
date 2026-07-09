@@ -15,39 +15,19 @@ import { TagInput } from "@/components/ui/aurora/tag-input";
 import { Textarea } from "@/components/ui/aurora/textarea";
 import { apiErrorMessage } from "@/lib/api-error-message";
 import { BUILDER_DISTROS } from "@/lib/builder/distros";
+import type {
+  BuilderPreset,
+  BuiltImageRecord,
+  BuildStatus,
+  GetBuildStatusResult,
+} from "@/lib/build-worker/contracts";
 import { parseDevcontainerJson } from "@/lib/import/devcontainer";
 import { importMiseToml, importToolVersionsFile } from "@/lib/import/mise";
-
-type BuildStatus = {
-  buildId: string;
-  status: string;
-  imageAlias: string;
-  logOffset: number;
-  logChunk: string;
-  error?: string;
-};
 
 type SearchResult = {
   manager: string;
   name: string;
   description?: string;
-};
-
-type ImageRecord = {
-  imageAlias: string;
-  isMaster: boolean;
-  distro: string;
-  release: string;
-  basedOn?: string;
-};
-
-type PresetRecord = {
-  id: string;
-  name: string;
-  distro: string;
-  release: string;
-  packages: string[];
-  postInstallCommands: string[];
 };
 
 const MAX_LOG_CHARS = 80_000;
@@ -60,14 +40,17 @@ export function BuilderPanel() {
   const [postInstall, setPostInstall] = useState("");
   const [imageAlias, setImageAlias] = useState("incus-web-custom");
   const [presetName, setPresetName] = useState("default");
-  const [build, setBuild] = useState<BuildStatus>();
+  const [build, setBuild] = useState<GetBuildStatusResult>();
   const [log, setLog] = useState("");
+  const [logTruncated, setLogTruncated] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [importedCommandsNeedReview, setImportedCommandsNeedReview] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [images, setImages] = useState<ImageRecord[]>([]);
-  const [presets, setPresets] = useState<PresetRecord[]>([]);
+  const [images, setImages] = useState<BuiltImageRecord[]>([]);
+  const [presets, setPresets] = useState<BuilderPreset[]>([]);
   const pollTimerRef = useRef<number | undefined>(undefined);
   const abortRef = useRef<AbortController | undefined>(undefined);
+  const logLengthRef = useRef(0);
   const releases = useMemo(
     () => BUILDER_DISTROS.find((entry) => entry.id === distro)?.releases ?? [],
     [distro],
@@ -94,7 +77,13 @@ export function BuilderPanel() {
 
   async function dispatchBuild() {
     setMessage(undefined);
+    if (importedCommandsNeedReview) {
+      setMessage("Review imported post-install commands before building");
+      return;
+    }
     setLog("");
+    logLengthRef.current = 0;
+    setLogTruncated(false);
     cancelBuildPolling();
     try {
       const response = await fetch("/api/builds", {
@@ -134,9 +123,17 @@ export function BuilderPanel() {
       if (!response.ok || body?.ok !== true) {
         throw new Error(apiErrorMessage(body, "build status failed"));
       }
-      const result = body.operation.result as BuildStatus;
+      const result = body.operation.result as GetBuildStatusResult;
       setBuild(result);
-      setLog((current) => appendBoundedLog(current, result.logChunk || ""));
+      const chunk = result.logChunk || "";
+      if (logLengthRef.current + chunk.length > MAX_LOG_CHARS) {
+        setLogTruncated(true);
+      }
+      setLog((current) => {
+        const next = appendBoundedLog(current, chunk);
+        logLengthRef.current = next.length;
+        return next;
+      });
       if (result.status === "queued" || result.status === "running") {
         pollTimerRef.current = window.setTimeout(
           () => void pollBuild(buildId, result.logOffset),
@@ -153,25 +150,29 @@ export function BuilderPanel() {
   }
 
   async function savePreset() {
-    const response = await fetch("/api/builds", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "savePreset",
-        name: presetName,
-        distro,
-        release,
-        packages,
-        postInstallCommands: postInstallCommands(postInstall),
-      }),
-    });
-    const body = await response.json().catch(() => undefined);
-    if (!response.ok || body?.ok !== true) {
-      setMessage(apiErrorMessage(body, "preset save failed"));
-      return;
+    setMessage(undefined);
+    try {
+      const response = await fetch("/api/builds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "savePreset",
+          name: presetName,
+          distro,
+          release,
+          packages,
+          postInstallCommands: postInstallCommands(postInstall),
+        }),
+      });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "preset save failed"));
+      }
+      setMessage("Preset saved");
+      void refreshRegistry();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "preset save failed");
     }
-    setMessage("Preset saved");
-    void refreshRegistry();
   }
 
   async function refreshRegistry() {
@@ -202,25 +203,35 @@ export function BuilderPanel() {
   }
 
   async function importFile(kind: "devcontainer" | "tool-versions" | "mise", file: File) {
-    const text = await file.text();
-    if (kind === "devcontainer") {
-      const imported = parseDevcontainerJson(text, { externalSource: true });
-      if (imported.distroRelease) {
-        setDistro(imported.distroRelease.distro);
-        setRelease(imported.distroRelease.release);
+    setMessage(undefined);
+    try {
+      const text = await file.text();
+      if (kind === "devcontainer") {
+        const imported = parseDevcontainerJson(text, { externalSource: true });
+        if (imported.distroRelease) {
+          setDistro(imported.distroRelease.distro);
+          setRelease(imported.distroRelease.release);
+        }
+        setPackages((current) => [...new Set([...current, ...imported.packages])]);
+        const commands = imported.postInstallCommands.map((entry) => entry.command);
+        setPostInstall((current) => [current, ...commands].filter(Boolean).join("\n"));
+        if (commands.length > 0) setImportedCommandsNeedReview(true);
+        setMessage(`${imported.skipped.length} devcontainer field(s) skipped`);
+        return;
       }
-      setPackages((current) => [...new Set([...current, ...imported.packages])]);
-      setPostInstall((current) =>
-        [current, ...imported.postInstallCommands.map((entry) => entry.command)].filter(Boolean).join("\n"),
+      const imported = kind === "mise" ? importMiseToml(text, "build-time") : importToolVersionsFile(text, "build-time");
+      if (imported.postInstallCommand) {
+        setPostInstall((current) => [current, imported.postInstallCommand].filter(Boolean).join("\n"));
+        setImportedCommandsNeedReview(true);
+      }
+      setMessage(`${imported.tools.length} mise tool pin(s) imported`);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `Import failed for ${file.name}: ${error.message}`
+          : `Import failed for ${file.name}`,
       );
-      setMessage(`${imported.skipped.length} devcontainer field(s) skipped`);
-      return;
     }
-    const imported = kind === "mise" ? importMiseToml(text, "build-time") : importToolVersionsFile(text, "build-time");
-    if (imported.postInstallCommand) {
-      setPostInstall((current) => [current, imported.postInstallCommand].filter(Boolean).join("\n"));
-    }
-    setMessage(`${imported.tools.length} mise tool pin(s) imported`);
   }
 
   function handleDistroChange(next: string) {
@@ -311,10 +322,45 @@ export function BuilderPanel() {
       ) : null}
 
       <Field htmlFor="builder-post-install" label="Post-install commands" description="Review imported commands before building.">
-        <Textarea id="builder-post-install" value={postInstall} onChange={(event) => setPostInstall(event.target.value)} className="min-h-32" />
+        <Textarea
+          id="builder-post-install"
+          value={postInstall}
+          onChange={(event) => {
+            setPostInstall(event.target.value);
+            if (importedCommandsNeedReview) setImportedCommandsNeedReview(true);
+          }}
+          className="min-h-32"
+        />
       </Field>
-      <Button iconLeft={<HammerIcon />} variant="aurora" onClick={() => void dispatchBuild()}>Build image</Button>
+      {importedCommandsNeedReview ? (
+        <Banner
+          tone="warn"
+          title="Review imported commands"
+          description="Imported post-install commands can run during image builds. Confirm they are expected before dispatching."
+          action={
+            <Button size="sm" variant="neutral" onClick={() => setImportedCommandsNeedReview(false)}>
+              Reviewed
+            </Button>
+          }
+        />
+      ) : null}
+      <Button
+        iconLeft={<HammerIcon />}
+        variant="aurora"
+        disabled={importedCommandsNeedReview}
+        onClick={() => void dispatchBuild()}
+      >
+        Build image
+      </Button>
       {message ? <Banner tone={message.toLowerCase().includes("failed") ? "error" : "info"} kind="tag" title={message} /> : null}
+      {logTruncated ? (
+        <Banner
+          tone="warn"
+          kind="tag"
+          title="Log truncated"
+          description="Only the latest build log output is shown in this panel."
+        />
+      ) : null}
       {log ? <pre className="max-h-80 overflow-auto rounded-[8px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 aurora-text-code text-xs">{log}</pre> : null}
       <div className="grid gap-3 md:grid-cols-2">
         <section className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
@@ -363,7 +409,7 @@ function postInstallCommands(value: string) {
   return value.split("\n").map((entry) => entry.trim()).filter(Boolean);
 }
 
-function buildStatusTone(status: string) {
+function buildStatusTone(status: BuildStatus) {
   if (status === "failed") return "error";
   if (status === "succeeded") return "success";
   return "info";

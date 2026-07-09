@@ -210,28 +210,35 @@ describe("WorkspaceDashboard", () => {
         },
       ],
     };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ ok: true, runs: [] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+    let agentListCalls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target === "/api/builds") {
+        return okResponse({
           ok: true,
-          run: failedCodexRun,
-        }),
-      })
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ ok: true, runs: [failedCodexRun] }),
-      });
+          images: { result: { images: [] } },
+          presets: { result: { presets: [] } },
+        });
+      }
+      if (target.includes("/agent-runs") && init?.method === "POST") {
+        return okResponse({ ok: true, run: failedCodexRun });
+      }
+      if (target.includes("/agent-runs")) {
+        agentListCalls += 1;
+        return okResponse({
+          ok: true,
+          runs: agentListCalls === 1 ? [] : [failedCodexRun],
+        });
+      }
+      return okResponse({ ok: true });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/agent-runs")),
+    ).toBe(false);
     fireEvent.click(screen.getByRole("tab", { name: /agents/i }));
     await screen.findByRole("heading", { name: "Agent runs" });
 
@@ -292,4 +299,61 @@ describe("WorkspaceDashboard", () => {
       "/workspaces/workspace-incus-web/agent-runs/run_20260702000102_ab12cd34",
     );
   });
+
+  it("keeps icon tabs accessible and opens settings mutations from the dashboard", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target === "/api/builds") {
+        return okResponse({
+          ok: true,
+          images: { result: { images: [] } },
+          presets: { result: { presets: [] } },
+        });
+      }
+      if (target.endsWith("/config") && init?.method === "POST") {
+        return okResponse({ ok: true });
+      }
+      return okResponse({ ok: true, snapshots: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<WorkspaceDashboard inventory={inventory} />);
+
+    for (const tab of ["overview", "agents", "builder", "settings"]) {
+      expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("tab", { name: "settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+
+    fireEvent.change(screen.getByLabelText(/CPU limit/i), {
+      target: { value: "4" },
+    });
+    fireEvent.change(screen.getByLabelText(/Memory limit/i), {
+      target: { value: "8GiB" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save limits/i }));
+
+    await waitFor(() => {
+      const configCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith("/config") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(configCall).toBeTruthy();
+      expect(JSON.parse(String((configCall?.[1] as RequestInit).body))).toEqual({
+        action: "setLimits",
+        cpu: "4",
+        memory: "8GiB",
+      });
+    });
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
 });
+
+function okResponse(body: unknown) {
+  return {
+    ok: true,
+    json: async () => body,
+  } as Response;
+}

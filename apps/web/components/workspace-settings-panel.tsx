@@ -30,6 +30,16 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
   const [snapshots, setSnapshots] = useState<Array<{ name: string; createdAt?: string }>>([]);
 
   useEffect(() => {
+    setCpu(workspace.resources.effectiveCpu ?? "");
+    setMemory(workspace.resources.effectiveMemory ?? "");
+    setHostPath(workspace.workspaceHostPath ?? "");
+  }, [
+    workspace.resources.effectiveCpu,
+    workspace.resources.effectiveMemory,
+    workspace.workspaceHostPath,
+  ]);
+
+  useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void fetchNoStore(`/api/workspaces/${workspace.id}/snapshots`, controller.signal).then((body) => {
@@ -49,10 +59,14 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
     };
   }, [workspace.id]);
 
-  async function mutate(action: string, payload: Record<string, unknown>) {
-    setPending(action);
+  function resetActionState(action: string) {
     setStatus((current) => ({ ...current, [action]: undefined }));
     setErrors((current) => ({ ...current, [action]: undefined }));
+  }
+
+  async function mutate(action: string, payload: Record<string, unknown>) {
+    setPending(action);
+    resetActionState(action);
     try {
       const response = await fetch(`/api/workspaces/${workspace.id}/config`, {
         method: "POST",
@@ -64,6 +78,7 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
         throw new Error(apiErrorMessage(body, "configuration update failed"));
       }
       setStatus((current) => ({ ...current, [action]: "Saved" }));
+      if (action === "clearMount") setHostPath("");
       router.refresh();
     } catch (error) {
       setErrors((current) => ({
@@ -77,8 +92,7 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
 
   async function createSnapshot() {
     setPending("createSnapshot");
-    setStatus((current) => ({ ...current, createSnapshot: undefined }));
-    setErrors((current) => ({ ...current, createSnapshot: undefined }));
+    resetActionState("createSnapshot");
     try {
       const response = await fetch(`/api/workspaces/${workspace.id}/snapshots`, {
         method: "POST",

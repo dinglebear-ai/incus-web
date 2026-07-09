@@ -194,12 +194,7 @@ function WorkspaceFeature({
   tone?: "cyan" | "success" | "warn";
   href?: string;
 }) {
-  const color =
-    tone === "success"
-      ? "var(--aurora-success)"
-      : tone === "warn"
-        ? "var(--aurora-warn)"
-        : "var(--aurora-accent-primary)";
+  const color = featureToneColor(tone);
   const className =
     "grid min-h-[82px] grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 text-left";
   const content = (
@@ -228,6 +223,17 @@ function WorkspaceFeature({
   }
 
   return <div className={className}>{content}</div>;
+}
+
+function featureToneColor(tone: "cyan" | "success" | "warn") {
+  switch (tone) {
+    case "success":
+      return "var(--aurora-success)";
+    case "warn":
+      return "var(--aurora-warn)";
+    case "cyan":
+      return "var(--aurora-accent-primary)";
+  }
 }
 
 function WorkspaceFeatures({ workspace }: { workspace: Workspace }) {
@@ -266,12 +272,7 @@ function SectionLabel({
   children: ReactNode;
   tone?: "cyan" | "rose" | "success";
 }) {
-  const color =
-    tone === "rose"
-      ? "var(--aurora-accent-pink)"
-      : tone === "success"
-        ? "var(--aurora-success)"
-        : "var(--aurora-accent-primary)";
+  const color = sectionToneColor(tone);
 
   return (
     <div className="flex items-center gap-2">
@@ -281,6 +282,17 @@ function SectionLabel({
       </h2>
     </div>
   );
+}
+
+function sectionToneColor(tone: "cyan" | "rose" | "success") {
+  switch (tone) {
+    case "rose":
+      return "var(--aurora-accent-pink)";
+    case "success":
+      return "var(--aurora-success)";
+    case "cyan":
+      return "var(--aurora-accent-primary)";
+  }
 }
 
 function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
@@ -301,36 +313,6 @@ function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
       <WorkspaceDetailsPanel workspace={workspace} />
     </div>
   );
-}
-
-function AgentsPane({ workspace }: { workspace: Workspace }) {
-  return (
-    <TaskPanel>
-      <Suspense fallback={<p className="aurora-text-meta">Loading agent runs…</p>}>
-        <AgentRunDispatch workspace={workspace} />
-      </Suspense>
-    </TaskPanel>
-  );
-}
-
-function BuilderPane() {
-  return (
-    <TaskPanel>
-      <BuilderPanel />
-    </TaskPanel>
-  );
-}
-
-function SettingsPane({ workspace }: { workspace: Workspace }) {
-  return (
-    <TaskPanel>
-      <WorkspaceSettingsPanel workspace={workspace} />
-    </TaskPanel>
-  );
-}
-
-function TaskPanel({ children }: { children: ReactNode }) {
-  return <div className="min-w-0">{children}</div>;
 }
 
 function WorkspaceCard({
@@ -536,14 +518,7 @@ function DetailChip({
   value: string;
   tone?: "cyan" | "rose" | "success" | "warn";
 }) {
-  const color =
-    tone === "rose"
-      ? "var(--aurora-accent-pink)"
-      : tone === "success"
-        ? "var(--aurora-success)"
-        : tone === "warn"
-          ? "var(--aurora-warn)"
-          : "var(--aurora-accent-primary)";
+  const color = detailToneColor(tone);
 
   return (
     <span
@@ -556,6 +531,19 @@ function DetailChip({
       </span>
     </span>
   );
+}
+
+function detailToneColor(tone: "cyan" | "rose" | "success" | "warn") {
+  switch (tone) {
+    case "rose":
+      return "var(--aurora-accent-pink)";
+    case "success":
+      return "var(--aurora-success)";
+    case "warn":
+      return "var(--aurora-warn)";
+    case "cyan":
+      return "var(--aurora-accent-primary)";
+  }
 }
 
 function EmptyAccessState({ inventory }: { inventory: WorkspaceInventory }) {
@@ -736,21 +724,29 @@ export function WorkspaceDashboard({
                   </TabsContent>
                   <TabsContent value="agents">
                     {primaryWorkspace ? (
-                      <AgentsPane
+                      <div
                         key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                        workspace={primaryWorkspace}
-                      />
+                        className="min-w-0"
+                      >
+                        <Suspense fallback={<p className="aurora-text-meta">Loading agent runs…</p>}>
+                          <AgentRunDispatch workspace={primaryWorkspace} />
+                        </Suspense>
+                      </div>
                     ) : null}
                   </TabsContent>
-                  <TabsContent value="builder">
-                    <BuilderPane />
+                  <TabsContent value="builder" forceMount>
+                    <div className="min-w-0">
+                      <BuilderPanel />
+                    </div>
                   </TabsContent>
                   <TabsContent value="settings">
                     {primaryWorkspace ? (
-                      <SettingsPane
+                      <div
                         key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                        workspace={primaryWorkspace}
-                      />
+                        className="min-w-0"
+                      >
+                        <WorkspaceSettingsPanel workspace={primaryWorkspace} />
+                      </div>
                     ) : null}
                   </TabsContent>
                 </Tabs>
