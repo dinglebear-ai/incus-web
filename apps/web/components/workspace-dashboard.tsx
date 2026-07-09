@@ -20,7 +20,7 @@ import {
   XIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/aurora/badge";
 import {
@@ -119,11 +119,20 @@ function SetupCheck({ label, status }: { label: string; status: CheckStatus }) {
 
 function SetupCompleteNotice({ workspace }: { workspace: Workspace }) {
   const storageKey = `incus-web:setup-complete-dismissed:${workspace.id}:${workspace.createdAt}`;
-  const [dismissed, setDismissed] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.localStorage.getItem(storageKey) === "true",
-  );
+  // Start at `false` on both server and client so hydration always matches,
+  // then read the real value from localStorage post-mount. Reading
+  // localStorage inside the useState initializer would run it a second time
+  // during hydration (window defined) after SSR already rendered with a
+  // default of `false`, producing a client/server tree mismatch whenever a
+  // dismissal was previously stored.
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    if (window.localStorage.getItem(storageKey) === "true") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDismissed(true);
+    }
+  }, [storageKey]);
 
   if (workspace.setup.phase !== "ready" || dismissed) {
     return null;

@@ -144,10 +144,13 @@ describe("workspace inventory provisioner", () => {
   it("fails closed without identity headers when dev auth is not enabled", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("INCUS_WEB_ALLOW_DEV_AUTH", "");
+    // Isolate the "no identity headers" case from the separate
+    // trusted-proxy-secret requirement by satisfying that check explicitly.
+    vi.stubEnv("INCUS_WEB_TRUSTED_PROXY_SECRET", "shh");
 
-    expect(() => getActorFromHeaders(new Headers())).toThrow(
-      AuthenticationRequiredError,
-    );
+    expect(() =>
+      getActorFromHeaders(new Headers({ "x-incus-web-proxy-secret": "shh" })),
+    ).toThrow(AuthenticationRequiredError);
   });
 
   it("returns the current incus-web workspace read-only inventory", async () => {
@@ -585,6 +588,9 @@ describe("workspace inventory provisioner", () => {
 
   it("surfaces static prototype mode as a production configuration error", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    // Not exercising the identity trust model here -- opt out of its
+    // separate production requirement so this test stays focused.
+    vi.stubEnv("INCUS_WEB_ALLOW_DEV_AUTH", "1");
     useOwnerSubject();
     usePrototypeStaticMode();
     const actor = ownerActor();
@@ -664,6 +670,9 @@ describe("workspace inventory provisioner", () => {
 
   it("uses authenticated ownership in production only when explicitly enabled", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    // Not exercising the identity trust model here -- opt out of its
+    // separate production requirement so this test stays focused.
+    vi.stubEnv("INCUS_WEB_ALLOW_DEV_AUTH", "1");
     vi.stubEnv("INCUS_WEB_WORKSPACE_OWNER_MODE", "authenticated");
     vi.stubEnv("INCUS_WEB_ALLOW_SHARED_PROTOTYPE", "1");
     const actor = getActorFromHeaders(authHeaders({ subject: "owner-subject" }));

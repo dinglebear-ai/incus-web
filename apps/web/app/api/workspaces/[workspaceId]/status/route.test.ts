@@ -11,9 +11,12 @@ const workspace = {
 
 const sendWorkspaceCommand = vi.fn();
 const getWorkspaceRefForActor = vi.fn();
+const headersMock = vi.fn(
+  async () => new Headers({ "x-auth-request-email": "test@example.com" }),
+);
 
 vi.mock("next/headers", () => ({
-  headers: vi.fn(async () => new Headers({ "x-auth-request-email": "test@example.com" })),
+  headers: () => headersMock(),
 }));
 
 vi.mock("@/lib/workspaces/provisioner", () => ({
@@ -25,6 +28,22 @@ describe("workspace status route", () => {
   beforeEach(() => {
     getWorkspaceRefForActor.mockReturnValue({ ok: true, workspace });
     sendWorkspaceCommand.mockReset();
+    headersMock.mockResolvedValue(
+      new Headers({ "x-auth-request-email": "test@example.com" }),
+    );
+  });
+
+  it("rejects requests missing a matching trusted proxy secret before calling the provisioner", async () => {
+    vi.stubEnv("INCUS_WEB_TRUSTED_PROXY_SECRET", "shh");
+
+    const response = await GET(new Request("http://localhost/api"), {
+      params: Promise.resolve({ workspaceId: workspace.id }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(sendWorkspaceCommand).not.toHaveBeenCalled();
+
+    vi.unstubAllEnvs();
   });
 
   it("rejects workspace mismatches without calling the provisioner", async () => {
