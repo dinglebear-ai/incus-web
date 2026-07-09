@@ -570,6 +570,34 @@ install_host_provisioner_server() {
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 
   install_host_provisioner_agent_runs_module
+  install_host_provisioner_service_auth_module
+}
+
+# provisioner-server.mjs imports this module by relative path
+# (./service-auth.mjs) -- it must live alongside the installed
+# provisioner-server.mjs or the service crash-loops with
+# ERR_MODULE_NOT_FOUND. Installed as its own step (not folded into the
+# provisioner-server.mjs install above) so a future new provisioner-side
+# module gets the same explicit, easy-to-audit treatment as this one and
+# agent-runs.mjs, rather than accreting more implicit-dependency copies
+# into a single sudo_cmd install call.
+install_host_provisioner_service_auth_module() {
+  local source_file="$INCUS_WEB_PROVISIONER_SERVICE_AUTH"
+  local tmp_file=""
+  local install_dir
+
+  if [[ ! -f "$source_file" ]]; then
+    [[ "$ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD" == "1" ]] || die "host provisioner service-auth module is missing locally; set ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1 to fetch it from INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL"
+    [[ "$INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL" == https://* ]] || die "INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL must use https://"
+    tmp_file="$(mktemp)"
+    curl --proto '=https' --tlsv1.2 -fsSL "$INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL" -o "$tmp_file"
+    source_file="$tmp_file"
+  fi
+
+  install_dir="$(dirname "$INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH")"
+  sudo_cmd install -d -m 755 "$install_dir"
+  sudo_cmd install -m 644 "$source_file" "$INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH"
+  [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 }
 
 install_host_provisioner_agent_runs_module() {
