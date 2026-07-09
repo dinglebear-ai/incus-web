@@ -832,7 +832,11 @@ function validateRestartWorkspacePayload(
 // silently accepting them just relocates the mistake to incus's own error
 // path. "b" is mandatory in MEMORY_LIMIT_PATTERN so a caller must state a
 // unit explicitly (e.g. "512b" for byte-precision, not a bare "512").
-const CPU_LIMIT_PATTERN = /^\d+(\.\d+)?$/;
+// CPU_LIMIT_PATTERN requires an integer: incus's limits.cpu is a CPU count,
+// not a fractional allowance (that's the separate limits.cpu.allowance key),
+// so "1.5" would pass this pattern but fail at the `incus config set`
+// boundary if it were allowed here.
+const CPU_LIMIT_PATTERN = /^\d+$/;
 const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
 
 function isPositiveLimitValue(value: string): boolean {
@@ -965,7 +969,7 @@ function validateCreateWorkspaceResult(
 function validateLifecycleWorkspaceResult(
   result: unknown,
   workspace: ProvisionerWorkspaceRef,
-  state: "running" | "stopped" | undefined,
+  requiredState: "running" | "stopped" | undefined,
   requireStatus: boolean,
 ): ValidationResult<LifecycleWorkspaceResult> {
   if (!isRecord(result)) {
@@ -974,13 +978,13 @@ function validateLifecycleWorkspaceResult(
   if (result.workspaceId !== workspace.id) {
     return metadataMismatch("lifecycle result workspace did not match request");
   }
-  // state === undefined means "either running or stopped is acceptable" --
-  // used by commands like SetWorkspaceLimits that don't force a particular
-  // lifecycle transition, unlike Start/Stop/Restart which each require one.
-  if (state !== undefined && result.state !== state) {
+  // A caller that omits requiredState (e.g. SetWorkspaceLimits, which
+  // doesn't force a particular lifecycle transition unlike Start/Stop/
+  // Restart) accepts either "running" or "stopped".
+  if (requiredState !== undefined && result.state !== requiredState) {
     return invalid("lifecycle result state is invalid");
   }
-  if (state === undefined && result.state !== "running" && result.state !== "stopped") {
+  if (requiredState === undefined && result.state !== "running" && result.state !== "stopped") {
     return invalid("lifecycle result state is invalid");
   }
   if (requireStatus && result.status === undefined) {

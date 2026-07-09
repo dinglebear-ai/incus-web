@@ -864,13 +864,6 @@ describe("workspace inventory provisioner", () => {
     expect(operation.status).toBe("succeeded");
   });
 
-  it("no longer needs a stand-in command type for the mutation-gate pinning test", () => {
-    // SetWorkspaceLimits is now a real, permanent entry in
-    // MUTATING_COMMAND_TYPES -- update the Phase 0 pinning test's
-    // expectation accordingly (see the next step in this task).
-    expect(isMutatingCommandType("SetWorkspaceLimits")).toBe(true);
-  });
-
   it("treats exactly SetWorkspaceLimits as mutating today", () => {
     // Pins the current state: MUTATING_COMMAND_TYPES in contracts.ts
     // contains exactly SetWorkspaceLimits. When a future command (e.g.

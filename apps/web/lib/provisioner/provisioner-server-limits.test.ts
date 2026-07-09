@@ -152,3 +152,103 @@ describe("provisioner-server SetWorkspaceLimits (integration)", () => {
     });
   });
 });
+
+describe("provisioner-server SetWorkspaceLimits reaches the real incus call (integration)", () => {
+  // A separate spawn pointed at a container name that cannot exist on any
+  // host, rather than reusing the default "incus-web" container: a payload
+  // that passes validateLimitsPayload must proceed to a real `incus config
+  // set`/`get` invocation, and this suite asserts that happens without ever
+  // risking a mutation against a real, possibly-in-use container.
+  const nonexistentContainer = "incus-web-integration-test-does-not-exist";
+  let tempDir: string;
+  let socketPath: string;
+  let child: ChildProcess;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "incus-web-provisioner-limits-real-"));
+    socketPath = join(tempDir, "provisioner.sock");
+
+    child = spawn(
+      process.execPath,
+      [join(currentDir, "../../../../scripts/provisioner-server.mjs")],
+      {
+        env: {
+          ...process.env,
+          INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
+          INCUS_WEB_PROVISIONER_SOCKET: socketPath,
+          INCUS_WEB_PROVISIONER_HOST: "",
+          INCUS_WEB_PROVISIONER_PORT: "0",
+          INCUS_WEB_INCUS_CONTAINER: nonexistentContainer,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    await waitForSocket(socketPath);
+  }, 15000);
+
+  afterAll(async () => {
+    child?.kill();
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  const workspace = {
+    id: "workspace-incus-web",
+    ownerUserId: "user-1",
+    incusProject: "default",
+    incusContainer: nonexistentContainer,
+  };
+
+  it("proceeds past validation and attempts a real `incus config set` for a valid cpu value, instead of silently no-op'ing", async () => {
+    const response = await postOperations(socketPath, {
+      version: "provisioner.v1",
+      requestId: "req-valid-set",
+      type: "SetWorkspaceLimits",
+      actor: {
+        userId: "user-1",
+        oidcSubject: "subject-1",
+        email: "owner@example.com",
+      },
+      workspace,
+      payload: { cpu: "2" },
+    });
+
+    expect(response.status).toBe(200);
+    // A valid payload must fail because the container doesn't exist (the
+    // real incus CLI call was attempted), not because validation rejected
+    // it -- a code path that quietly stopped calling incus at all would
+    // still return "failed", but with error.code "invalid_input", not this.
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "incus_unavailable" },
+    });
+  });
+
+  it("proceeds past validation and attempts a real `incus config unset` when clearing a limit, instead of silently no-op'ing", async () => {
+    const response = await postOperations(socketPath, {
+      version: "provisioner.v1",
+      requestId: "req-valid-clear",
+      type: "SetWorkspaceLimits",
+      actor: {
+        userId: "user-1",
+        oidcSubject: "subject-1",
+        email: "owner@example.com",
+      },
+      workspace,
+      payload: {},
+    });
+
+    expect(response.status).toBe(200);
+    // clearLimitIfSet's `config get` read against a nonexistent container
+    // returns "" via optionalText (a read failure looks like "not set"), so
+    // this path itself no-ops -- but the mandatory status refetch right
+    // after (getWorkspaceStatus's non-optional incus query calls) still
+    // hits the real, nonexistent container and fails hard, proving the
+    // clear path reaches live incus state rather than short-circuiting to a
+    // canned success.
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "incus_unavailable" },
+    });
+  });
+});

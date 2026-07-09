@@ -497,7 +497,10 @@ async function restartWorkspace(command, options) {
 // bearer token (INCUS_WEB_PROVISIONER_TOKEN) -- it must not assume the
 // caller already validated, the same way validateWorkspace() below never
 // assumes the caller sent a real workspace tuple.
-const CPU_LIMIT_PATTERN = /^\d+(\.\d+)?$/;
+// Incus limits.cpu is an integer CPU count (fractional allowances live under
+// the separate limits.cpu.allowance key), so fractional values here are
+// rejected instead of silently failing at the `incus config set` boundary.
+const CPU_LIMIT_PATTERN = /^\d+$/;
 const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
 
 function isPositiveLimitValue(value) {
@@ -506,8 +509,17 @@ function isPositiveLimitValue(value) {
 }
 
 function validateLimitsPayload(payload) {
-  const cpu = payload?.cpu;
-  const memory = payload?.memory;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "SetWorkspaceLimits payload must be an object";
+  }
+  const allowedKeys = new Set(["cpu", "memory"]);
+  for (const key of Object.keys(payload)) {
+    if (!allowedKeys.has(key)) {
+      return "SetWorkspaceLimits payload contains unsupported fields";
+    }
+  }
+  const cpu = payload.cpu;
+  const memory = payload.memory;
   if (
     cpu !== undefined &&
     (typeof cpu !== "string" ||
@@ -529,6 +541,21 @@ function validateLimitsPayload(payload) {
   return undefined;
 }
 
+// `incus config unset` exits non-zero when the key is already unset, so a
+// bare optionalText()-wrapped unset would swallow every failure -- daemon
+// down, permission denied, timeout -- as if it were that one idempotent
+// case. Reading the current value first (config get is safe to no-op via
+// optionalText, same as getWorkspaceStatus's reads) and only unsetting when
+// something is actually set keeps the idempotency check separate from error
+// handling: a real unset failure still throws and surfaces as a failed
+// operation instead of a silent no-op success.
+async function clearLimitIfSet(container, key, options) {
+  const current = await optionalText(["config", "get", container, key], options);
+  if (current !== "") {
+    await incusText(["config", "unset", container, key], options);
+  }
+}
+
 async function setWorkspaceLimits(command, options) {
   const invalidReason = validateLimitsPayload(command.payload);
   if (invalidReason) {
@@ -541,16 +568,13 @@ async function setWorkspaceLimits(command, options) {
   if (cpu !== undefined) {
     await incusText(["config", "set", incusContainer, `limits.cpu=${cpu}`], options);
   } else {
-    // "unset" on a key that is already unset exits non-zero (Incus treats
-    // it as an error, not a no-op) -- optionalText tolerates that so
-    // clearing an already-clear limit is idempotent instead of failing.
-    await optionalText(["config", "unset", incusContainer, "limits.cpu"], options);
+    await clearLimitIfSet(incusContainer, "limits.cpu", options);
   }
 
   if (memory !== undefined) {
     await incusText(["config", "set", incusContainer, `limits.memory=${memory}`], options);
   } else {
-    await optionalText(["config", "unset", incusContainer, "limits.memory"], options);
+    await clearLimitIfSet(incusContainer, "limits.memory", options);
   }
 
   statusCache = undefined;
