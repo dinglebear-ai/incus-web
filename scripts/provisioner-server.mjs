@@ -491,7 +491,50 @@ async function restartWorkspace(command, options) {
   };
 }
 
+// Mirrors apps/web/lib/provisioner/contracts.ts's validateSetWorkspaceLimitsPayload
+// exactly. The web app already validates before sending a command, but this
+// process is a separate trust boundary reachable by anything holding the
+// bearer token (INCUS_WEB_PROVISIONER_TOKEN) -- it must not assume the
+// caller already validated, the same way validateWorkspace() below never
+// assumes the caller sent a real workspace tuple.
+const CPU_LIMIT_PATTERN = /^\d+(\.\d+)?$/;
+const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
+
+function isPositiveLimitValue(value) {
+  const numeric = Number.parseFloat(value);
+  return Number.isFinite(numeric) && numeric > 0;
+}
+
+function validateLimitsPayload(payload) {
+  const cpu = payload?.cpu;
+  const memory = payload?.memory;
+  if (
+    cpu !== undefined &&
+    (typeof cpu !== "string" ||
+      cpu.length === 0 ||
+      !CPU_LIMIT_PATTERN.test(cpu) ||
+      !isPositiveLimitValue(cpu))
+  ) {
+    return "cpu must be a positive number string";
+  }
+  if (
+    memory !== undefined &&
+    (typeof memory !== "string" ||
+      memory.length === 0 ||
+      !MEMORY_LIMIT_PATTERN.test(memory) ||
+      !isPositiveLimitValue(memory))
+  ) {
+    return "memory must be a positive byte-size string with a unit, like 4GiB or 512MB";
+  }
+  return undefined;
+}
+
 async function setWorkspaceLimits(command, options) {
+  const invalidReason = validateLimitsPayload(command.payload);
+  if (invalidReason) {
+    throw Object.assign(new Error(invalidReason), { code: "invalid_input" });
+  }
+
   const cpu = command.payload?.cpu;
   const memory = command.payload?.memory;
 
@@ -679,6 +722,13 @@ async function handleCommand(command, options) {
         );
     }
   } catch (err) {
+    if (err && err.code === "invalid_input") {
+      return operation(
+        command,
+        "failed",
+        error("invalid_input", err.message, false),
+      );
+    }
     const message = err instanceof Error ? err.message : String(err);
     return operation(
       command,

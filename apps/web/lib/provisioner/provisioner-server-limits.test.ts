@@ -92,7 +92,25 @@ describe("provisioner-server SetWorkspaceLimits (integration)", () => {
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it("returns a structured invalid_input error for a malformed SetWorkspaceLimits command, proving the handler is reachable and validates before touching incus", async () => {
+  // The workspace tuple below intentionally matches provisioner-server.mjs's
+  // own defaults (workspaceId="workspace-incus-web", incusProject="default",
+  // incusContainer="incus-web", used when INCUS_WEB_WORKSPACE_ID/
+  // INCUS_WEB_INCUS_PROJECT/INCUS_WEB_INCUS_CONTAINER are unset, which they
+  // are in this spawn's env) so validateWorkspace() passes and the request
+  // actually reaches the SetWorkspaceLimits case being tested here.
+  const matchingWorkspace = {
+    id: "workspace-incus-web",
+    ownerUserId: "user-1",
+    incusProject: "default",
+    incusContainer: "incus-web",
+  };
+
+  it("rejects a malformed SetWorkspaceLimits payload with invalid_input, proving the server re-validates independently of the web app's own validation", async () => {
+    // This test posts directly to the provisioner's Unix socket, bypassing
+    // apps/web/lib/provisioner/contracts.ts's validateSetWorkspaceLimitsPayload
+    // entirely -- proving scripts/provisioner-server.mjs's own
+    // validateLimitsPayload (the actual privileged-execution boundary) does
+    // its own independent check rather than trusting the caller already did.
     const response = await postOperations(socketPath, {
       version: "provisioner.v1",
       requestId: "req-1",
@@ -102,24 +120,35 @@ describe("provisioner-server SetWorkspaceLimits (integration)", () => {
         oidcSubject: "subject-1",
         email: "owner@example.com",
       },
-      workspace: {
-        id: "workspace-incus-web",
-        ownerUserId: "user-1",
-        incusProject: "default",
-        incusContainer: "incus-web",
-      },
+      workspace: matchingWorkspace,
       payload: { cpu: "not-a-number" },
     });
 
-    // The provisioner's own validateWorkspace() check runs before command
-    // validation and will reject this tuple as a metadata_mismatch unless
-    // it matches the real host's INCUS_WEB_WORKSPACE_ID/PROJECT/CONTAINER
-    // env vars -- so this asserts on "not a 404 (route exists) and not a
-    // 401 (auth passed)" rather than a specific success/validation code,
-    // proving the SetWorkspaceLimits case in handleCommand's switch is
-    // reachable and doesn't crash, without needing to match this dev
-    // machine's exact (unset) workspace env vars.
-    expect(response.status).not.toBe(404);
-    expect(response.status).not.toBe(401);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a zero cpu value at the server boundary, not just the client boundary", async () => {
+    const response = await postOperations(socketPath, {
+      version: "provisioner.v1",
+      requestId: "req-2",
+      type: "SetWorkspaceLimits",
+      actor: {
+        userId: "user-1",
+        oidcSubject: "subject-1",
+        email: "owner@example.com",
+      },
+      workspace: matchingWorkspace,
+      payload: { cpu: "0" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "invalid_input" },
+    });
   });
 });

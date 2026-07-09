@@ -883,6 +883,42 @@ describe("provisioner contract validators", () => {
     });
   });
 
+  it("rejects a SetWorkspaceLimits payload with a zero cpu value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { cpu: "0" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with a bare (unit-less) memory value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { memory: "4" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("accepts a SetWorkspaceLimits payload with a byte-unit memory value", () => {
+    const command: ProvisionerCommand<"SetWorkspaceLimits"> = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { memory: "512b" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it("accepts a valid SetWorkspaceLimits operation result", () => {
     const operation: ProvisionerOperation<"SetWorkspaceLimits"> = {
       id: "op-limits-1",

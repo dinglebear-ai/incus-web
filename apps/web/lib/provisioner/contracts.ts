@@ -827,8 +827,18 @@ function validateRestartWorkspacePayload(
   return { ok: true, value: payload as RestartWorkspacePayload };
 }
 
+// Requires a positive value: a "0" CPU count or a bare (unit-less) memory
+// number are syntactically parseable but not sensible workspace limits, and
+// silently accepting them just relocates the mistake to incus's own error
+// path. "b" is mandatory in MEMORY_LIMIT_PATTERN so a caller must state a
+// unit explicitly (e.g. "512b" for byte-precision, not a bare "512").
 const CPU_LIMIT_PATTERN = /^\d+(\.\d+)?$/;
-const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b?$/i;
+const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
+
+function isPositiveLimitValue(value: string): boolean {
+  const numeric = Number.parseFloat(value);
+  return Number.isFinite(numeric) && numeric > 0;
+}
 
 function validateSetWorkspaceLimitsPayload(
   payload: unknown,
@@ -843,17 +853,19 @@ function validateSetWorkspaceLimitsPayload(
     payload.cpu !== undefined &&
     (typeof payload.cpu !== "string" ||
       payload.cpu.length === 0 ||
-      !CPU_LIMIT_PATTERN.test(payload.cpu))
+      !CPU_LIMIT_PATTERN.test(payload.cpu) ||
+      !isPositiveLimitValue(payload.cpu))
   ) {
-    return invalid("cpu must be a non-negative number string");
+    return invalid("cpu must be a positive number string");
   }
   if (
     payload.memory !== undefined &&
     (typeof payload.memory !== "string" ||
       payload.memory.length === 0 ||
-      !MEMORY_LIMIT_PATTERN.test(payload.memory))
+      !MEMORY_LIMIT_PATTERN.test(payload.memory) ||
+      !isPositiveLimitValue(payload.memory))
   ) {
-    return invalid("memory must be a byte-size string like 4GiB or 512MB");
+    return invalid("memory must be a positive byte-size string with a unit, like 4GiB or 512MB");
   }
   return { ok: true, value: payload as SetWorkspaceLimitsPayload };
 }
@@ -892,7 +904,7 @@ function validateOperationResult(
     case "ListAgentRuns":
       return validateListAgentRunsResult(result, workspace);
     case "SetWorkspaceLimits":
-      return validateSetWorkspaceLimitsResult(result, workspace);
+      return validateLifecycleWorkspaceResult(result, workspace, undefined, false);
   }
 }
 
@@ -953,7 +965,7 @@ function validateCreateWorkspaceResult(
 function validateLifecycleWorkspaceResult(
   result: unknown,
   workspace: ProvisionerWorkspaceRef,
-  state: "running" | "stopped",
+  state: "running" | "stopped" | undefined,
   requireStatus: boolean,
 ): ValidationResult<LifecycleWorkspaceResult> {
   if (!isRecord(result)) {
@@ -962,7 +974,13 @@ function validateLifecycleWorkspaceResult(
   if (result.workspaceId !== workspace.id) {
     return metadataMismatch("lifecycle result workspace did not match request");
   }
-  if (result.state !== state) {
+  // state === undefined means "either running or stopped is acceptable" --
+  // used by commands like SetWorkspaceLimits that don't force a particular
+  // lifecycle transition, unlike Start/Stop/Restart which each require one.
+  if (state !== undefined && result.state !== state) {
+    return invalid("lifecycle result state is invalid");
+  }
+  if (state === undefined && result.state !== "running" && result.state !== "stopped") {
     return invalid("lifecycle result state is invalid");
   }
   if (requireStatus && result.status === undefined) {
@@ -975,28 +993,6 @@ function validateLifecycleWorkspaceResult(
     }
   }
   return { ok: true, value: result as LifecycleWorkspaceResult };
-}
-
-function validateSetWorkspaceLimitsResult(
-  result: unknown,
-  workspace: ProvisionerWorkspaceRef,
-): ValidationResult<SetWorkspaceLimitsResult> {
-  if (!isRecord(result)) {
-    return invalid("SetWorkspaceLimits result must be an object");
-  }
-  if (result.workspaceId !== workspace.id) {
-    return metadataMismatch("SetWorkspaceLimits result workspace did not match request");
-  }
-  if (result.state !== "running" && result.state !== "stopped") {
-    return invalid("SetWorkspaceLimits result state is invalid");
-  }
-  if (result.status !== undefined) {
-    const status = validateWorkspaceRuntimeStatus(result.status, workspace);
-    if (!status.ok) {
-      return status;
-    }
-  }
-  return { ok: true, value: result as SetWorkspaceLimitsResult };
 }
 
 function validateRunSetupResult(
