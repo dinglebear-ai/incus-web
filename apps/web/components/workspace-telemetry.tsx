@@ -175,7 +175,7 @@ export function TelemetryFreshness({
   const label = freshnessLabel({ live, polling, secondsAgo });
 
   return (
-    <span className="inline-flex items-center gap-1.5 aurora-text-meta">
+    <span className="hidden items-center gap-1.5 aurora-text-meta sm:inline-flex">
       <ActivityIcon
         aria-hidden="true"
         className={`size-3 ${live ? "text-[var(--aurora-success)]" : "text-[var(--aurora-text-muted)]"}`}
@@ -252,11 +252,11 @@ export function MetricBar({
 }) {
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="aurora-text-ui text-[var(--aurora-text-muted)]">
+      <div className="grid gap-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <span className="min-w-0 truncate aurora-text-ui text-[var(--aurora-text-muted)]">
           {label}
         </span>
-        <span className="aurora-text-code text-[var(--aurora-text-primary)]">
+        <span className="min-w-0 break-words aurora-text-code text-[var(--aurora-text-primary)] sm:text-right">
           {usedLabel}
         </span>
       </div>

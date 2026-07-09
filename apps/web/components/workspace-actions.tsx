@@ -5,6 +5,11 @@ import { PlayIcon, RotateCwIcon, SquareIcon, TerminalIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/aurora/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/aurora/tooltip";
 import { ToolbarGroup } from "@/components/ui/aurora/toolbar";
 import type { Workspace, WorkspaceState } from "@/lib/workspaces/types";
 
@@ -57,35 +62,56 @@ export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
       <div className="flex flex-wrap items-center justify-end gap-1.5">
         <ToolbarGroup>
           {controls.map((action) => (
-            <Button
-              key={action}
-              variant={action === "stop" ? "warn" : "aurora"}
-              iconLeft={iconForAction(action)}
-              loading={pendingAction === action}
-              disabled={busy}
-              onClick={() => void runAction(action)}
-            >
-              {labelForAction(action)}
-            </Button>
+            <Tooltip key={action}>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={action === "stop" ? "warn" : "aurora"}
+                  aria-label={labelForAction(action)}
+                  loading={pendingAction === action}
+                  disabled={busy}
+                  onClick={() => void runAction(action)}
+                >
+                  {iconForAction(action)}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{labelForAction(action)}</TooltipContent>
+            </Tooltip>
           ))}
         </ToolbarGroup>
         <ToolbarGroup>
           {workspace.terminalUrl ? (
-            <Button
-              asChild
-              variant="aurora"
-              iconLeft={<TerminalIcon aria-hidden="true" />}
-            >
-              <a href={workspace.terminalUrl}>Open terminal</a>
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  asChild
+                  size="icon"
+                  variant="aurora"
+                  aria-label="Open terminal"
+                >
+                  <a href={workspace.terminalUrl}>
+                    <TerminalIcon aria-hidden="true" />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Open terminal</TooltipContent>
+            </Tooltip>
           ) : (
-            <Button
-              variant="neutral"
-              disabled
-              iconLeft={<TerminalIcon aria-hidden="true" />}
-            >
-              Terminal pending
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="neutral"
+                  disabled
+                  aria-label="Terminal pending"
+                >
+                  <TerminalIcon aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Terminal pending</TooltipContent>
+            </Tooltip>
           )}
         </ToolbarGroup>
       </div>

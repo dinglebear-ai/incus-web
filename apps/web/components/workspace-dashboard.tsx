@@ -1,11 +1,13 @@
 "use client";
 
 import {
+  BotIcon,
   BoxesIcon,
   CircleGaugeIcon,
   DatabaseIcon,
   GitBranchIcon,
   HammerIcon,
+  InfoIcon,
   SettingsIcon,
   SlidersHorizontalIcon,
   ShieldCheckIcon,
@@ -28,12 +30,6 @@ import {
   DescriptionItem,
   DescriptionList,
 } from "@/components/ui/aurora/description-list";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/aurora/tabs";
 import { Button } from "@/components/ui/aurora/button";
 import {
   Tooltip,
@@ -81,8 +77,8 @@ const WorkspaceSettingsPanel = dynamic(
   { ssr: false },
 );
 
-const WORKSPACE_TABS = ["overview", "agents", "builder", "settings"] as const;
-type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
+const WORKSPACE_TOOLS = ["agents", "builder", "settings", "inspect"] as const;
+type WorkspaceTool = (typeof WORKSPACE_TOOLS)[number];
 
 function stateTone(state: WorkspaceState) {
   if (state === "running") return "success";
@@ -301,21 +297,18 @@ function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
   const live = isLiveState(workspace.state);
 
   return (
-    <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
-      <WorkspaceCard
-        workspace={workspace}
-        history={history}
-        lastUpdated={lastUpdated}
-        polling={polling}
-        error={error}
-        live={live}
-      />
-      <WorkspaceDetailsPanel workspace={workspace} />
-    </div>
+    <WorkspaceCockpit
+      workspace={workspace}
+      history={history}
+      lastUpdated={lastUpdated}
+      polling={polling}
+      error={error}
+      live={live}
+    />
   );
 }
 
-function WorkspaceCard({
+function WorkspaceCockpit({
   workspace,
   history,
   lastUpdated,
@@ -331,22 +324,13 @@ function WorkspaceCard({
   live: boolean;
 }) {
   return (
-    <Card
-      accent={false}
-      elevated={false}
-      className="overflow-hidden"
-      style={{
-        background: "var(--aurora-panel-medium)",
-        borderRadius: 4,
-        boxShadow: "none",
-      }}
-    >
-      <CardHeader className="grid gap-4 border-b-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+    <section className="min-w-0 max-w-full overflow-hidden rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
+      <div className="grid gap-4 border-b border-[var(--aurora-border-default)] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--aurora-accent-primary)_9%,var(--aurora-panel-strong)),var(--aurora-panel-strong)_42%,var(--aurora-panel-medium))] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <CardTitle as="h1" className="truncate">
+            <h1 className="truncate aurora-text-section text-[var(--aurora-text-primary)]">
               {workspace.name}
-            </CardTitle>
+            </h1>
             <Badge
               tone={stateTone(workspace.state)}
               dot
@@ -355,9 +339,9 @@ function WorkspaceCard({
               {workspace.state}
             </Badge>
           </div>
-          <CardDescription className="aurora-text-code">
+          <p className="mt-1 aurora-text-code text-[var(--aurora-text-muted)]">
             {workspace.incusProject} / {workspace.incusContainer}
-          </CardDescription>
+          </p>
         </div>
 
         <div className="flex flex-col items-start gap-3 lg:items-end">
@@ -367,23 +351,27 @@ function WorkspaceCard({
           />
           <WorkspaceActions workspace={workspace} />
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-5 p-4">
+      <div className="grid gap-4 p-4">
         <ReadinessRunway workspace={workspace} />
-        <WorkspaceTelemetryPanel
-          workspace={workspace}
-          history={history}
-          lastUpdated={lastUpdated}
-          polling={polling}
-          error={error}
-          live={live}
-        />
-
-        <WorkspaceFeatures workspace={workspace} />
-        <SetupProgressPanel workspace={workspace} />
-      </CardContent>
-    </Card>
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_260px]">
+          <WorkspaceTelemetryPanel
+            workspace={workspace}
+            history={history}
+            lastUpdated={lastUpdated}
+            polling={polling}
+            error={error}
+            live={live}
+          />
+          <WorkspaceFacts workspace={workspace} />
+        </div>
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(220px,0.45fr)]">
+          <WorkspaceFeatures workspace={workspace} />
+          <SetupProgressPanel workspace={workspace} />
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -453,7 +441,7 @@ function WorkspaceTelemetryPanel({
   const memoryPercent = history.at(-1)?.memoryPercent;
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-3">
       <div className="flex items-center justify-between gap-3">
         <SectionLabel icon={CircleGaugeIcon}>Live telemetry</SectionLabel>
         <TelemetryFreshness
@@ -505,6 +493,98 @@ function WorkspaceTelemetryPanel({
       </StatGrid>
     </section>
   );
+}
+
+function WorkspaceFacts({ workspace }: { workspace: Workspace }) {
+  const facts = [
+    ["Image", workspace.image ?? workspace.templateVersion],
+    ["Storage", workspace.storagePool ?? "unknown"],
+    ["Bridge", workspace.networkBridge ?? "unknown"],
+    ["Profile", workspace.resourceProfileId],
+    ["Path", workspace.workspaceHostPath ?? "profile default"],
+    ["Processes", workspace.resources.effectiveProcesses ?? "profile default"],
+  ];
+
+  return (
+    <aside className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+      <SectionLabel icon={InfoIcon}>Workspace facts</SectionLabel>
+      <dl className="mt-3 grid gap-2">
+        {facts.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 border-b border-[var(--aurora-border-default)] pb-2 last:border-b-0 last:pb-0">
+            <dt className="aurora-text-meta">{label}</dt>
+            <dd className="truncate aurora-text-ui text-[var(--aurora-text-primary)]" title={value}>
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </aside>
+  );
+}
+
+function ToolDeck({
+  workspace,
+  activeTool,
+  setActiveTool,
+}: {
+  workspace: Workspace;
+  activeTool: WorkspaceTool;
+  setActiveTool: (tool: WorkspaceTool) => void;
+}) {
+  return (
+    <aside className="min-w-0 rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)] lg:sticky lg:top-3 lg:max-h-[calc(100vh-1.5rem)] lg:overflow-auto">
+      <div className="border-b border-[var(--aurora-border-default)] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="aurora-text-label text-[var(--aurora-text-muted)]">Command dock</p>
+            <p className="aurora-text-ui text-[var(--aurora-text-primary)]">Run, build, tune, inspect</p>
+          </div>
+          <Badge tone="info" shape="tag">{activeTool}</Badge>
+        </div>
+        <div className="mt-3 grid grid-cols-4 gap-1.5">
+          {WORKSPACE_TOOLS.map((tool) => (
+            <Tooltip key={tool}>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={activeTool === tool ? "aurora" : "neutral"}
+                  aria-label={toolLabel(tool)}
+                  onClick={() => setActiveTool(tool)}
+                >
+                  {toolIcon(tool)}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{toolLabel(tool)}</TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+      </div>
+      <div className="min-w-0 p-3">
+        <ActiveToolPanel workspace={workspace} activeTool={activeTool} />
+      </div>
+    </aside>
+  );
+}
+
+function ActiveToolPanel({
+  workspace,
+  activeTool,
+}: {
+  workspace: Workspace;
+  activeTool: WorkspaceTool;
+}) {
+  if (activeTool === "agents") {
+    return (
+      <Suspense fallback={<p className="aurora-text-meta">Loading agent runs...</p>}>
+        <AgentRunDispatch workspace={workspace} />
+      </Suspense>
+    );
+  }
+
+  if (activeTool === "builder") return <BuilderPanel />;
+  if (activeTool === "settings") return <WorkspaceSettingsPanel workspace={workspace} />;
+  return <WorkspaceDetailsPanel workspace={workspace} />;
 }
 
 function DetailChip({
@@ -594,13 +674,14 @@ export function WorkspaceDashboard({
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(
     inventory.workspaces[0]?.id,
   );
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
+  const [activeTool, setActiveTool] = useState<WorkspaceTool>("agents");
   const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
+  const hasMultipleWorkspaces = inventory.workspaces.length > 1;
 
   return (
-    <main className="aurora-page-shell min-h-screen text-[var(--aurora-text-primary)]">
+    <main className="aurora-page-shell min-h-screen overflow-x-hidden text-[var(--aurora-text-primary)]">
       <TooltipProvider>
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-3 px-3 py-3 md:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-screen w-full min-w-0 max-w-[1600px] flex-col gap-3 px-3 py-3 md:px-5">
         <header className="flex flex-col gap-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-4 py-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-[4px] border border-[var(--aurora-border-strong)] bg-[var(--aurora-control-surface)]">
@@ -646,112 +727,75 @@ export function WorkspaceDashboard({
           </div>
         </header>
 
-        <section className="grid gap-4">
+        <section className="grid min-w-0 gap-4">
           {inventory.workspaces.length > 0 ? (
-            <>
-              <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
-                <nav className="aurora-nav-shell hidden space-y-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] p-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] lg:block">
-                  <p className="aurora-text-label px-1 text-[var(--aurora-text-muted)]">
-                    Workspaces
-                  </p>
-                  {inventory.workspaces.map((workspace) => (
-                    <div
-                      key={workspace.id}
-                      className={`grid gap-1 rounded-[8px] border px-3 py-2 transition ${
-                        workspace.id === primaryWorkspace?.id
-                          ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)] shadow-[var(--aurora-active-glow)]"
-                          : "border-[var(--aurora-border-default)] hover:border-[var(--aurora-border-strong)] hover:bg-[var(--aurora-hover-bg)]"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        className="min-w-0 text-left aurora-text-ui"
-                        onClick={() => setActiveWorkspaceId(workspace.id)}
+            primaryWorkspace ? (
+              <div
+                className={
+                  hasMultipleWorkspaces
+                    ? "grid min-w-0 items-start gap-3 xl:grid-cols-[220px_minmax(0,1fr)_minmax(340px,420px)]"
+                    : "grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]"
+                }
+              >
+                {hasMultipleWorkspaces ? (
+                  <nav className="aurora-nav-shell hidden space-y-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] p-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] xl:block">
+                    <p className="aurora-text-label px-1 text-[var(--aurora-text-muted)]">
+                      Workspaces
+                    </p>
+                    {inventory.workspaces.map((workspace) => (
+                      <div
+                        key={workspace.id}
+                        className={`grid gap-1 rounded-[8px] border px-3 py-2 transition ${
+                          workspace.id === primaryWorkspace?.id
+                            ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)] shadow-[var(--aurora-active-glow)]"
+                            : "border-[var(--aurora-border-default)] hover:border-[var(--aurora-border-strong)] hover:bg-[var(--aurora-hover-bg)]"
+                        }`}
                       >
-                        <span className="block truncate">{workspace.name}</span>
-                      </button>
-                      <span className="flex items-center justify-between gap-2">
-                        <Badge tone={stateTone(workspace.state)} shape="tag">
-                          {workspace.state}
-                        </Badge>
-                        {workspace.terminalUrl ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                asChild
-                                size="icon"
-                                variant="ghost"
-                                aria-label={`Open terminal for ${workspace.name}`}
-                              >
-                                <a href={workspace.terminalUrl}>
-                                  <TerminalIcon aria-hidden="true" className="size-4" />
-                                </a>
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Open terminal</TooltipContent>
-                          </Tooltip>
-                        ) : null}
-                      </span>
-                    </div>
-                  ))}
-                </nav>
-                <Tabs
-                  value={activeTab}
-                  onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
-                  className="min-w-0"
-                >
-                  <TabsList className="grid grid-cols-4 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-2 pt-1 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] sm:inline-flex">
-                    {WORKSPACE_TABS.map((tab) => (
-                      <TabsTrigger
-                        key={tab}
-                        value={tab}
-                        aria-label={tab}
-                        className="justify-center capitalize"
-                        onClick={() => setActiveTab(tab)}
-                      >
-                        {tabIcon(tab)}
-                        <span className="hidden sm:inline">{tab}</span>
-                      </TabsTrigger>
+                        <button
+                          type="button"
+                          className="min-w-0 text-left aurora-text-ui"
+                          onClick={() => setActiveWorkspaceId(workspace.id)}
+                        >
+                          <span className="block truncate">{workspace.name}</span>
+                        </button>
+                        <span className="flex items-center justify-between gap-2">
+                          <Badge tone={stateTone(workspace.state)} shape="tag">
+                            {workspace.state}
+                          </Badge>
+                          {workspace.terminalUrl ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  asChild
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label={`Open terminal for ${workspace.name}`}
+                                >
+                                  <a href={workspace.terminalUrl}>
+                                    <TerminalIcon aria-hidden="true" className="size-4" />
+                                  </a>
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Open terminal</TooltipContent>
+                            </Tooltip>
+                          ) : null}
+                        </span>
+                      </div>
                     ))}
-                  </TabsList>
-                  <TabsContent value="overview">
-                    {primaryWorkspace ? (
-                      <WorkspacePane
-                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                        workspace={primaryWorkspace}
-                      />
-                    ) : null}
-                  </TabsContent>
-                  <TabsContent value="agents">
-                    {primaryWorkspace ? (
-                      <div
-                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                        className="min-w-0"
-                      >
-                        <Suspense fallback={<p className="aurora-text-meta">Loading agent runs…</p>}>
-                          <AgentRunDispatch workspace={primaryWorkspace} />
-                        </Suspense>
-                      </div>
-                    ) : null}
-                  </TabsContent>
-                  <TabsContent value="builder" forceMount>
-                    <div className="min-w-0">
-                      <BuilderPanel />
-                    </div>
-                  </TabsContent>
-                  <TabsContent value="settings">
-                    {primaryWorkspace ? (
-                      <div
-                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                        className="min-w-0"
-                      >
-                        <WorkspaceSettingsPanel workspace={primaryWorkspace} />
-                      </div>
-                    ) : null}
-                  </TabsContent>
-                </Tabs>
+                  </nav>
+                ) : null}
+                <WorkspacePane
+                  key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                  workspace={primaryWorkspace}
+                />
+                <ToolDeck
+                  key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}:tools`}
+                  workspace={primaryWorkspace}
+                  activeTool={activeTool}
+                  setActiveTool={setActiveTool}
+                />
               </div>
-            </>
+            ) : null
           ) : (
             <EmptyAccessState inventory={inventory} />
           )}
@@ -763,20 +807,33 @@ export function WorkspaceDashboard({
   );
 }
 
-function tabIcon(tab: WorkspaceTab) {
-  const className = "size-3.5";
-  switch (tab) {
-    case "overview":
-      return <CircleGaugeIcon aria-hidden="true" className={className} />;
+function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
+  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+}
+
+function toolLabel(tool: WorkspaceTool) {
+  switch (tool) {
     case "agents":
-      return <GitBranchIcon aria-hidden="true" className={className} />;
+      return "Agent runs";
+    case "builder":
+      return "Image builder";
+    case "settings":
+      return "Workspace settings";
+    case "inspect":
+      return "Inspector";
+  }
+}
+
+function toolIcon(tool: WorkspaceTool) {
+  const className = "size-4";
+  switch (tool) {
+    case "agents":
+      return <BotIcon aria-hidden="true" className={className} />;
     case "builder":
       return <HammerIcon aria-hidden="true" className={className} />;
     case "settings":
       return <SettingsIcon aria-hidden="true" className={className} />;
+    case "inspect":
+      return <InfoIcon aria-hidden="true" className={className} />;
   }
-}
-
-function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
-  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
 }

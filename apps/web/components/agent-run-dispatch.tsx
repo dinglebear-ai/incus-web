@@ -179,9 +179,9 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
         </p>
       ) : null}
 
-      <div className="grid min-h-[38rem] gap-0 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
+      <div className="grid gap-0 2xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
         <form
-          className="space-y-3 border-b border-[var(--aurora-border-default)] p-4 xl:border-b-0 xl:border-r"
+          className="space-y-3 border-b border-[var(--aurora-border-default)] p-4 2xl:border-b-0 2xl:border-r"
           onSubmit={submitRun}
         >
           <Field htmlFor="agent-run-agent" label="Agent">
@@ -339,7 +339,7 @@ function AgentRunRow({
 export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
   if (!run) {
     return (
-      <div className="grid min-h-80 place-items-center p-4">
+      <div className="grid min-h-36 place-items-center p-4">
         <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-4 text-center">
           <p className="aurora-text-ui">No session selected</p>
         </div>

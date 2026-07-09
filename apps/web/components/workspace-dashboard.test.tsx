@@ -87,18 +87,15 @@ describe("WorkspaceDashboard", () => {
     expect(screen.queryByText("mise")).not.toBeInTheDocument();
     expect(screen.getAllByText("Dotfiles").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("ubuntu-24.04-code-v1")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Private workspace. Sharing requires an explicit user or org grant.",
-      ),
-    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
     expect(
       screen.getAllByRole("link", { name: /open terminal/i }).at(-1),
     ).toHaveAttribute("href", "/terminal/");
-    expect(screen.getByRole("tab", { name: /agents/i })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Agent runs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent runs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Image builder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Inspector" })).toBeInTheDocument();
   });
 
   it("shows setup details while provisioning is not complete", () => {
@@ -236,11 +233,7 @@ describe("WorkspaceDashboard", () => {
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
-    expect(
-      fetchMock.mock.calls.some(([url]) => String(url).includes("/agent-runs")),
-    ).toBe(false);
-    fireEvent.click(screen.getByRole("tab", { name: /agents/i }));
-    await screen.findByRole("heading", { name: "Agent runs" });
+    await screen.findByRole("heading", { name: "Agent runs" }, { timeout: 5000 });
 
     await waitFor(() => {
       expect(
@@ -300,7 +293,7 @@ describe("WorkspaceDashboard", () => {
     );
   });
 
-  it("keeps icon tabs accessible and opens settings mutations from the dashboard", async () => {
+  it("keeps command dock actions accessible and opens settings mutations from the dashboard", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = String(url);
       if (target === "/api/builds") {
@@ -319,11 +312,11 @@ describe("WorkspaceDashboard", () => {
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
-    for (const tab of ["overview", "agents", "builder", "settings"]) {
-      expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
+    for (const action of ["Agent runs", "Image builder", "Workspace settings", "Inspector"]) {
+      expect(screen.getByRole("button", { name: action })).toBeInTheDocument();
     }
 
-    fireEvent.click(screen.getByRole("tab", { name: "settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }));
     await screen.findByRole("heading", { name: "Settings" });
 
     fireEvent.change(screen.getByLabelText(/CPU limit/i), {
