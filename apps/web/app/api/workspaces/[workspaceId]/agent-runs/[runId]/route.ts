@@ -9,6 +9,11 @@ import {
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
 import { validateListAgentRunsPayload } from "@/lib/provisioner/contracts";
+import {
+  jsonError,
+  provisionerError,
+  statusForProvisionerError,
+} from "@/lib/workspaces/route-helpers";
 
 type RouteContext = {
   params: Promise<{
@@ -71,41 +76,4 @@ async function prepareRequest(context: RouteContext) {
     };
   }
   return { ok: true as const, actor, runId };
-}
-
-function jsonError(code: string, message: string, status: number) {
-  return Response.json({ ok: false, error: { code, message } }, { status });
-}
-
-function provisionerError(error: {
-  code: string;
-  message: string;
-  retryable: boolean;
-}) {
-  return Response.json(
-    {
-      ok: false,
-      error,
-    },
-    { status: statusForProvisionerError(error) },
-  );
-}
-
-function statusForProvisionerError(
-  error: { code: string; retryable: boolean } | undefined,
-) {
-  if (!error) return 409;
-  if (error.retryable) return 503;
-  if (
-    error.code === "unauthenticated_service" ||
-    error.code === "mutation_not_authorized"
-  ) {
-    return 403;
-  }
-  if (error.code === "invalid_input" || error.code === "metadata_mismatch") {
-    return 400;
-  }
-  if (error.code === "missing_controller_config") return 424;
-  if (error.code === "not_implemented") return 501;
-  return 409;
 }

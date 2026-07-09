@@ -9,8 +9,7 @@ import type { Workspace, WorkspaceMetrics } from "@/lib/workspaces/types";
 const POLL_INTERVAL_MS = 4000;
 const HISTORY_LENGTH = 30;
 
-type Sample = {
-  at: number;
+export type Sample = {
   cpuPercent?: number;
   memoryPercent?: number;
 };
@@ -37,7 +36,7 @@ function loadPercent(metrics: WorkspaceMetrics) {
   return Math.min(100, Math.round((load1 / metrics.cpuCount) * 100));
 }
 
-function isLiveState(state: Workspace["state"]) {
+export function isLiveState(state: Workspace["state"]) {
   return (
     state === "running" ||
     state === "starting" ||
@@ -56,29 +55,27 @@ function isLiveState(state: Workspace["state"]) {
 export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
   const [workspace, setWorkspace] = React.useState(initial);
   const [history, setHistory] = React.useState<Sample[]>(() => [
-    sampleFrom(initial, Date.now()),
+    sampleFrom(initial),
   ]);
   const [lastUpdated, setLastUpdated] = React.useState(() => Date.now());
   const [polling, setPolling] = React.useState(false);
   const [error, setError] = React.useState<string>();
 
-  // Re-seed local state when the identity of the workspace we're tracking
-  // changes (e.g. switching panes), without a setState-in-effect cascade:
-  // adjust state directly during render per
-  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
-  // `lastUpdated` is intentionally left alone here (render must stay pure —
-  // no `Date.now()`) and instead re-anchors itself off the next poll tick,
-  // which fires within POLL_INTERVAL_MS of the reset.
-  const [trackedWorkspaceId, setTrackedWorkspaceId] = React.useState(
-    initial.id,
-  );
-  if (initial.id !== trackedWorkspaceId) {
-    setTrackedWorkspaceId(initial.id);
-    setWorkspace(initial);
-    setHistory([sampleFrom(initial, 0)]);
-  }
+  // No re-seed-on-identity-change logic here: the caller mounts one
+  // `WorkspacePane` per workspace keyed by `${workspace.id}:${createdAt}`
+  // (see workspace-dashboard.tsx), so a change in tracked workspace always
+  // remounts this hook from scratch rather than reusing the instance. A
+  // separate re-seed branch would be unreachable dead code that could only
+  // race an in-flight poll response against a reset it can never trigger.
+
+  // Guards against overlapping ticks: if a request outlives POLL_INTERVAL_MS
+  // (slow provisioner, network hiccup), the next interval fire is skipped
+  // rather than racing a second in-flight fetch for the same workspace.
+  const inFlightRef = React.useRef(false);
 
   const poll = React.useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setPolling(true);
     try {
       const response = await fetch(`/api/workspaces/${workspace.id}/status`, {
@@ -94,7 +91,7 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
       const polledAt = Date.now();
       setWorkspace(next);
       setHistory((current) =>
-        [...current, sampleFrom(next, polledAt)].slice(-HISTORY_LENGTH),
+        [...current, sampleFrom(next)].slice(-HISTORY_LENGTH),
       );
       setLastUpdated(polledAt);
       setError(undefined);
@@ -105,22 +102,50 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
           : "failed to refresh workspace telemetry",
       );
     } finally {
+      inFlightRef.current = false;
       setPolling(false);
     }
   }, [workspace.id]);
 
   React.useEffect(() => {
     if (!isLiveState(workspace.state)) return;
-    const timer = window.setInterval(() => void poll(), POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+
+    // Pause polling while the tab is hidden — modern browsers throttle but
+    // don't stop background `setInterval` timers, so a backgrounded
+    // dashboard tab would otherwise keep polling the backend indefinitely
+    // for a view nobody is looking at.
+    let timer: number | undefined;
+    const start = () => {
+      if (timer !== undefined) return;
+      timer = window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+    };
+    const stop = () => {
+      if (timer === undefined) return;
+      window.clearInterval(timer);
+      timer = undefined;
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        void poll();
+        start();
+      }
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [poll, workspace.state]);
 
   return { workspace, history, lastUpdated, polling, error };
 }
 
-function sampleFrom(workspace: Workspace, at: number): Sample {
+function sampleFrom(workspace: Workspace): Sample {
   return {
-    at,
     cpuPercent: loadPercent(workspace.metrics),
     memoryPercent: percent(
       workspace.metrics.memoryUsedBytes,

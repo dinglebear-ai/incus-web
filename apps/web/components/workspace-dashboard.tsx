@@ -39,10 +39,12 @@ import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { AgentRunDispatch } from "@/components/agent-run-dispatch";
 import { WorkspaceActions } from "@/components/workspace-actions";
 import {
+  isLiveState,
   MetricBar,
   Sparkline,
   TelemetryFreshness,
   useWorkspaceTelemetry,
+  type Sample,
 } from "@/components/workspace-telemetry";
 import type {
   CheckStatus,
@@ -324,7 +326,7 @@ function SectionLabel({
 function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
   const { workspace, history, lastUpdated, polling, error } =
     useWorkspaceTelemetry(seed);
-  const live = isLiveWorkspaceState(workspace.state);
+  const live = isLiveState(workspace.state);
 
   return (
     <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
@@ -350,7 +352,7 @@ function WorkspaceCard({
   live,
 }: {
   workspace: Workspace;
-  history: { at: number; cpuPercent?: number; memoryPercent?: number }[];
+  history: Sample[];
   lastUpdated: number;
   polling: boolean;
   error?: string;
@@ -414,16 +416,6 @@ function WorkspaceCard({
   );
 }
 
-function isLiveWorkspaceState(state: WorkspaceState) {
-  return (
-    state === "running" ||
-    state === "starting" ||
-    state === "restarting" ||
-    state === "setting_up" ||
-    state === "degraded"
-  );
-}
-
 function WorkspaceTelemetryPanel({
   workspace,
   history,
@@ -433,7 +425,7 @@ function WorkspaceTelemetryPanel({
   live,
 }: {
   workspace: Workspace;
-  history: { at: number; cpuPercent?: number; memoryPercent?: number }[];
+  history: Sample[];
   lastUpdated: number;
   polling: boolean;
   error?: string;

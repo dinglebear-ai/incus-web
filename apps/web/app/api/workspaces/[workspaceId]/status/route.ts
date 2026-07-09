@@ -9,13 +9,42 @@ import {
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
 import { statusToWorkspace } from "@/lib/provisioner/status-adapter";
-import type { ProvisionerError } from "@/lib/provisioner/contracts";
+import {
+  jsonError,
+  provisionerError,
+  statusForProvisionerError,
+} from "@/lib/workspaces/route-helpers";
+import type { ActorContext } from "@/lib/workspaces/types";
+import type { ProvisionerOperation } from "@/lib/provisioner/contracts";
 
 type RouteContext = {
   params: Promise<{
     workspaceId: string;
   }>;
 };
+
+// Coalesces genuinely concurrent `GetWorkspaceStatus` polls for the same
+// workspace into a single provisioner round trip — e.g. multiple open
+// dashboard tabs (or, later, multiple visible cards) polling the same
+// workspace at the same moment. This intentionally does NOT cache the
+// result past the in-flight request: it's removed from the map as soon as
+// it settles, so every poll after that still gets a fresh provisioner call
+// and no request is ever served stale data from a prior tick.
+const inFlightStatusRequests = new Map<
+  string,
+  Promise<ProvisionerOperation<"GetWorkspaceStatus">>
+>();
+
+function cachedWorkspaceStatus(actor: ActorContext, workspaceId: string) {
+  const existing = inFlightStatusRequests.get(workspaceId);
+  if (existing) return existing;
+
+  const promise = sendWorkspaceCommand(actor, "GetWorkspaceStatus", {}).finally(() => {
+    inFlightStatusRequests.delete(workspaceId);
+  });
+  inFlightStatusRequests.set(workspaceId, promise);
+  return promise;
+}
 
 // Lightweight per-workspace status poll used by the dashboard's live
 // telemetry — the client polls this on an interval instead of doing a full
@@ -41,7 +70,7 @@ export async function GET(_request: Request, context: RouteContext) {
     return jsonError("workspace_not_found", "workspace was not found", 404);
   }
 
-  const operation = await sendWorkspaceCommand(actor, "GetWorkspaceStatus", {});
+  const operation = await cachedWorkspaceStatus(actor, workspaceId);
   if (operation.status !== "succeeded" || !operation.result) {
     return Response.json(
       { ok: false, operation },
@@ -51,27 +80,4 @@ export async function GET(_request: Request, context: RouteContext) {
 
   const workspace = statusToWorkspace(operation.result, access.workspace.ownerUserId);
   return Response.json({ ok: true, workspace });
-}
-
-function jsonError(code: string, message: string, status: number) {
-  return Response.json({ ok: false, error: { code, message } }, { status });
-}
-
-function provisionerError(error: ProvisionerError) {
-  return Response.json({ ok: false, error }, { status: statusForProvisionerError(error) });
-}
-
-function statusForProvisionerError(error: ProvisionerError | undefined) {
-  if (!error) return 409;
-  if (error.retryable) return 503;
-  if (
-    error.code === "unauthenticated_service" ||
-    error.code === "mutation_not_authorized"
-  ) {
-    return 403;
-  }
-  if (error.code === "invalid_input" || error.code === "metadata_mismatch") {
-    return 400;
-  }
-  return 409;
 }
