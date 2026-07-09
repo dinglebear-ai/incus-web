@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { HammerIcon, PackagePlusIcon, SaveIcon, UploadIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { HammerIcon, PackagePlusIcon, RefreshCwIcon, SaveIcon, UploadIcon } from "lucide-react";
 
+import { Banner } from "@/components/ui/aurora/banner";
 import { Button } from "@/components/ui/aurora/button";
+import { ButtonGroup } from "@/components/ui/aurora/button-group";
 import { Badge } from "@/components/ui/aurora/badge";
+import { Field } from "@/components/ui/aurora/field";
 import { Input } from "@/components/ui/aurora/input";
+import { Item } from "@/components/ui/aurora/item";
+import { NativeSelect } from "@/components/ui/aurora/native-select";
+import { TagInput } from "@/components/ui/aurora/tag-input";
 import { Textarea } from "@/components/ui/aurora/textarea";
 import { apiErrorMessage } from "@/lib/api-error-message";
 import { BUILDER_DISTROS } from "@/lib/builder/distros";
@@ -44,6 +50,8 @@ type PresetRecord = {
   postInstallCommands: string[];
 };
 
+const MAX_LOG_CHARS = 80_000;
+
 export function BuilderPanel() {
   const [distro, setDistro] = useState("debian");
   const [release, setRelease] = useState("trixie");
@@ -58,6 +66,8 @@ export function BuilderPanel() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [presets, setPresets] = useState<PresetRecord[]>([]);
+  const pollTimerRef = useRef<number | undefined>(undefined);
+  const abortRef = useRef<AbortController | undefined>(undefined);
   const releases = useMemo(
     () => BUILDER_DISTROS.find((entry) => entry.id === distro)?.releases ?? [],
     [distro],
@@ -65,6 +75,12 @@ export function BuilderPanel() {
 
   useEffect(() => {
     void refreshRegistry();
+    return () => {
+      if (pollTimerRef.current !== undefined) {
+        window.clearTimeout(pollTimerRef.current);
+      }
+      abortRef.current?.abort();
+    };
   }, []);
 
   function addPackage(name = packageInput) {
@@ -77,6 +93,11 @@ export function BuilderPanel() {
   async function dispatchBuild() {
     setMessage(undefined);
     setLog("");
+    if (pollTimerRef.current !== undefined) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = undefined;
+    }
+    abortRef.current?.abort();
     try {
       const response = await fetch("/api/builds", {
         method: "POST",
@@ -103,9 +124,13 @@ export function BuilderPanel() {
   }
 
   async function pollBuild(buildId: string, offset: number) {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const response = await fetch(`/api/builds/${buildId}?offset=${offset}`, {
         headers: { "Cache-Control": "no-store" },
+        signal: controller.signal,
       });
       const body = await response.json().catch(() => undefined);
       if (!response.ok || body?.ok !== true) {
@@ -113,14 +138,19 @@ export function BuilderPanel() {
       }
       const result = body.operation.result as BuildStatus;
       setBuild(result);
-      setLog((current) => current + (result.logChunk || ""));
+      setLog((current) => boundedLog(current + (result.logChunk || "")));
       if (result.status === "queued" || result.status === "running") {
-        window.setTimeout(() => void pollBuild(buildId, result.logOffset), 2500);
+        pollTimerRef.current = window.setTimeout(
+          () => void pollBuild(buildId, result.logOffset),
+          2500,
+        );
       } else {
         void refreshRegistry();
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "build status failed");
+      if (!controller.signal.aborted) {
+        setMessage(error instanceof Error ? error.message : "build status failed");
+      }
     }
   }
 
@@ -201,81 +231,93 @@ export function BuilderPanel() {
   }
 
   return (
-    <section className="space-y-4 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4">
+    <section className="space-y-4 rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] p-4 shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <HammerIcon className="size-4 text-[var(--aurora-accent-primary)]" />
-          <h2 className="aurora-text-label">Builder</h2>
+          <h2 className="aurora-text-section">Builder</h2>
         </div>
         {build ? <Badge tone={build.status === "failed" ? "error" : build.status === "succeeded" ? "success" : "info"}>{build.status}</Badge> : null}
       </div>
 
       <div className="grid gap-3 md:grid-cols-4">
-        <select className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2" value={distro} onChange={(event) => handleDistroChange(event.target.value)}>
-          {BUILDER_DISTROS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-        </select>
-        <select className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2" value={release} onChange={(event) => setRelease(event.target.value)}>
-          {releases.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-        </select>
-        <Input value={imageAlias} onChange={(event) => setImageAlias(event.target.value)} aria-label="Image alias" />
-        <Input value={presetName} onChange={(event) => setPresetName(event.target.value)} aria-label="Preset name" />
+        <Field htmlFor="builder-distro" label="Distro">
+          <NativeSelect id="builder-distro" value={distro} onChange={(event) => handleDistroChange(event.target.value)}>
+            {BUILDER_DISTROS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+          </NativeSelect>
+        </Field>
+        <Field htmlFor="builder-release" label="Release">
+          <NativeSelect id="builder-release" value={release} onChange={(event) => setRelease(event.target.value)}>
+            {releases.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+          </NativeSelect>
+        </Field>
+        <Field htmlFor="builder-image-alias" label="Image alias">
+          <Input id="builder-image-alias" value={imageAlias} onChange={(event) => setImageAlias(event.target.value)} />
+        </Field>
+        <Field htmlFor="builder-preset-name" label="Preset name">
+          <Input id="builder-preset-name" value={presetName} onChange={(event) => setPresetName(event.target.value)} />
+        </Field>
       </div>
 
+      <Field htmlFor="builder-packages" label="Packages">
+        <TagInput
+          id="builder-packages"
+          value={packages}
+          onValueChange={setPackages}
+          placeholder="Add package…"
+        />
+      </Field>
+
       <div className="flex flex-wrap gap-2">
-        <Input value={packageInput} onChange={(event) => setPackageInput(event.target.value)} aria-label="Package name" placeholder="package" />
-        <Button iconLeft={<PackagePlusIcon />} onClick={() => addPackage()}>Add</Button>
+        <Input value={packageInput} onChange={(event) => setPackageInput(event.target.value)} aria-label="Package name" placeholder="package search" />
+        <Button iconLeft={<PackagePlusIcon />} onClick={() => addPackage()}>Add package</Button>
         <Button variant="neutral" onClick={() => void searchPackage()}>Search</Button>
-        <Button variant="neutral" onClick={() => void refreshRegistry()}>Refresh</Button>
-        <Button iconLeft={<SaveIcon />} variant="neutral" onClick={() => void savePreset()}>Preset</Button>
-        <label className="inline-flex items-center gap-2 rounded-[4px] border border-[var(--aurora-border-default)] px-3 py-2 aurora-text-ui">
-          <UploadIcon className="size-4" />
-          devcontainer
-          <input className="sr-only" type="file" accept=".json" onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void importFile("devcontainer", file);
-          }} />
-        </label>
-        <label className="inline-flex items-center gap-2 rounded-[4px] border border-[var(--aurora-border-default)] px-3 py-2 aurora-text-ui">
-          <UploadIcon className="size-4" />
-          mise
-          <input className="sr-only" type="file" accept=".toml,.tool-versions" onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void importFile(file.name.endsWith(".toml") ? "mise" : "tool-versions", file);
-          }} />
-        </label>
+        <Button variant="neutral" iconLeft={<RefreshCwIcon />} onClick={() => void refreshRegistry()}>Refresh</Button>
+        <Button iconLeft={<SaveIcon />} variant="neutral" onClick={() => void savePreset()}>Save preset</Button>
       </div>
+
+      <ButtonGroup>
+        <Button asChild variant="neutral" iconLeft={<UploadIcon aria-hidden="true" />}>
+          <label>
+            Import devcontainer
+            <input className="sr-only" type="file" accept=".json" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importFile("devcontainer", file);
+            }} />
+          </label>
+        </Button>
+        <Button asChild variant="neutral" iconLeft={<UploadIcon aria-hidden="true" />}>
+          <label>
+            Import mise
+            <input className="sr-only" type="file" accept=".toml,.tool-versions" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importFile(file.name.endsWith(".toml") ? "mise" : "tool-versions", file);
+            }} />
+          </label>
+        </Button>
+      </ButtonGroup>
 
       {searchResults.length > 0 ? (
         <div className="grid gap-2 md:grid-cols-2">
           {searchResults.map((result) => (
-            <button
+            <Item
               key={`${result.manager}:${result.name}`}
-              type="button"
-              className="rounded-[4px] border border-[var(--aurora-border-default)] p-2 text-left"
-              onClick={() => addPackage(result.name)}
-            >
-              <span className="aurora-text-ui">{result.name}</span>
-              <span className="aurora-text-meta ml-2">{result.manager}</span>
-              {result.description ? <p className="aurora-text-meta mt-1">{result.description}</p> : null}
-            </button>
+              title={result.name}
+              description={result.description ?? result.manager}
+              action={<Button size="sm" variant="neutral" onClick={() => addPackage(result.name)}>Add</Button>}
+            />
           ))}
         </div>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
-        {packages.map((pkg) => (
-          <button key={pkg} className="rounded-[4px] border border-[var(--aurora-border-default)] px-2 py-1 aurora-text-meta" onClick={() => setPackages((current) => current.filter((entry) => entry !== pkg))}>
-            {pkg}
-          </button>
-        ))}
-      </div>
-
-      <Textarea value={postInstall} onChange={(event) => setPostInstall(event.target.value)} aria-label="Post install commands" className="min-h-32" />
+      <Field htmlFor="builder-post-install" label="Post-install commands" description="Review imported commands before building.">
+        <Textarea id="builder-post-install" value={postInstall} onChange={(event) => setPostInstall(event.target.value)} className="min-h-32" />
+      </Field>
       <Button iconLeft={<HammerIcon />} variant="aurora" onClick={() => void dispatchBuild()}>Build image</Button>
-      {message ? <p className="aurora-text-meta">{message}</p> : null}
-      {log ? <pre className="max-h-80 overflow-auto rounded-[4px] border border-[var(--aurora-border-default)] bg-black/30 p-3 text-xs">{log}</pre> : null}
+      {message ? <Banner tone={message.toLowerCase().includes("failed") ? "error" : "info"} kind="tag" title={message} /> : null}
+      {log ? <pre className="max-h-80 overflow-auto rounded-[8px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 aurora-text-code text-xs">{log}</pre> : null}
       <div className="grid gap-3 md:grid-cols-2">
-        <section className="rounded-[4px] border border-[var(--aurora-border-default)] p-3">
+        <section className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
           <p className="aurora-text-ui">Images</p>
           <div className="mt-2 space-y-2">
             {images.map((image) => (
@@ -286,14 +328,14 @@ export function BuilderPanel() {
             ))}
           </div>
         </section>
-        <section className="rounded-[4px] border border-[var(--aurora-border-default)] p-3">
+        <section className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
           <p className="aurora-text-ui">Presets</p>
           <div className="mt-2 space-y-2">
             {presets.map((preset) => (
               <button
                 key={preset.id}
                 type="button"
-                className="block w-full rounded-[4px] border border-[var(--aurora-border-default)] p-2 text-left aurora-text-meta"
+                className="block w-full rounded-[8px] border border-[var(--aurora-border-default)] p-2 text-left aurora-text-meta hover:bg-[var(--aurora-hover-bg)]"
                 onClick={() => {
                   setDistro(preset.distro);
                   setRelease(preset.release);
@@ -313,4 +355,9 @@ export function BuilderPanel() {
 
 function postInstallCommands(value: string) {
   return value.split("\n").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function boundedLog(value: string) {
+  if (value.length <= MAX_LOG_CHARS) return value;
+  return value.slice(value.length - MAX_LOG_CHARS);
 }

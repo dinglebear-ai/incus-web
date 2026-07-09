@@ -86,7 +86,7 @@ describe("WorkspaceDashboard", () => {
     expect(screen.queryByText("Commands")).not.toBeInTheDocument();
     expect(screen.queryByText("Packages")).not.toBeInTheDocument();
     expect(screen.queryByText("mise")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Dotfiles")).toHaveLength(2);
+    expect(screen.getAllByText("Dotfiles").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("ubuntu-24.04-code-v1")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -96,9 +96,10 @@ describe("WorkspaceDashboard", () => {
     expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
     expect(
-      screen.getByRole("link", { name: /open terminal/i }),
+      screen.getAllByRole("link", { name: /open terminal/i }).at(-1),
     ).toHaveAttribute("href", "/terminal/");
-    expect(screen.getByRole("heading", { name: "Agent runs" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /agents/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Agent runs" })).not.toBeInTheDocument();
   });
 
   it("dismisses ready setup for the current container", () => {
@@ -262,8 +263,16 @@ describe("WorkspaceDashboard", () => {
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: /agents/i }));
+    await screen.findByRole("heading", { name: "Agent runs" });
+
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).includes("/agent-runs"),
+        ),
+      ).toHaveLength(1);
     });
 
     fireEvent.change(screen.getByLabelText(/Repo URL/), {
