@@ -10,6 +10,7 @@ export const PROVISIONER_COMMAND_TYPES = [
   "DispatchAgentRun",
   "ListAgentRuns",
   "SetWorkspaceLimits",
+  "ImportGoldenConfig",
 ] as const;
 
 // Command types that mutate workspace configuration (resource limits,
@@ -22,6 +23,7 @@ export const PROVISIONER_COMMAND_TYPES = [
 // a build error, not a silent runtime gap.
 export const MUTATING_COMMAND_TYPES = [
   "SetWorkspaceLimits",
+  "ImportGoldenConfig",
 ] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
 
 const PROVISIONER_WORKSPACE_STATES = [
@@ -102,7 +104,8 @@ export type ProvisionerErrorCode =
   | "missing_controller_config"
   | "not_implemented"
   | "timeout"
-  | "operation_failed";
+  | "operation_failed"
+  | "golden_config_failed";
 
 export type ProvisionerError = {
   code: ProvisionerErrorCode;
@@ -172,6 +175,16 @@ export type RestartWorkspacePayload = {
 export type SetWorkspaceLimitsPayload = {
   cpu?: string;
   memory?: string;
+};
+
+// The zip itself is staged to disk by the API route (see
+// apps/web/app/api/workspaces/[workspaceId]/golden-config/route.ts) at a
+// path the host provisioner derives from the already-authenticated
+// workspace tuple -- the payload never carries a path, only a content hash,
+// so a caller can't use this command to make the provisioner read an
+// arbitrary host file.
+export type ImportGoldenConfigPayload = {
+  sha256Hex: string;
 };
 
 export type RunSetupPayload = {
@@ -265,6 +278,13 @@ export type LifecycleWorkspaceResult = {
 
 export type SetWorkspaceLimitsResult = LifecycleWorkspaceResult;
 
+export type ImportGoldenConfigResult = {
+  workspaceId: WorkspaceId;
+  extractedAt: string;
+  fileCount: number;
+  warnings: string[];
+};
+
 export type RunSetupResult = {
   workspaceId: WorkspaceId;
   setup: ProvisionerSetupSummary;
@@ -291,6 +311,7 @@ export type ProvisionerCommandPayloadMap = {
   DispatchAgentRun: DispatchAgentRunPayload;
   ListAgentRuns: ListAgentRunsPayload;
   SetWorkspaceLimits: SetWorkspaceLimitsPayload;
+  ImportGoldenConfig: ImportGoldenConfigPayload;
 };
 
 export type ProvisionerCommandResultMap = {
@@ -303,6 +324,7 @@ export type ProvisionerCommandResultMap = {
   DispatchAgentRun: DispatchAgentRunResult;
   ListAgentRuns: ListAgentRunsResult;
   SetWorkspaceLimits: SetWorkspaceLimitsResult;
+  ImportGoldenConfig: ImportGoldenConfigResult;
 };
 
 export type ProvisionerCommand<
@@ -771,6 +793,8 @@ function validateCommandPayload(
       return validateListAgentRunsPayload(payload);
     case "SetWorkspaceLimits":
       return validateSetWorkspaceLimitsPayload(payload);
+    case "ImportGoldenConfig":
+      return validateImportGoldenConfigPayload(payload);
   }
 }
 
@@ -874,6 +898,26 @@ function validateSetWorkspaceLimitsPayload(
   return { ok: true, value: payload as SetWorkspaceLimitsPayload };
 }
 
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
+
+function validateImportGoldenConfigPayload(
+  payload: unknown,
+): ValidationResult<ImportGoldenConfigPayload> {
+  if (!isRecord(payload)) {
+    return invalid("ImportGoldenConfig payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["sha256Hex"])) {
+    return invalid("ImportGoldenConfig payload contains unsupported fields");
+  }
+  if (
+    typeof payload.sha256Hex !== "string" ||
+    !SHA256_HEX_PATTERN.test(payload.sha256Hex)
+  ) {
+    return invalid("sha256Hex must be a 64-character hex sha256 digest");
+  }
+  return { ok: true, value: payload as ImportGoldenConfigPayload };
+}
+
 function validateEmptyPayload(
   payload: unknown,
 ): ValidationResult<StartWorkspacePayload | GetWorkspaceStatusPayload> {
@@ -909,7 +953,41 @@ function validateOperationResult(
       return validateListAgentRunsResult(result, workspace);
     case "SetWorkspaceLimits":
       return validateLifecycleWorkspaceResult(result, workspace, undefined, false);
+    case "ImportGoldenConfig":
+      return validateImportGoldenConfigResult(result, workspace);
   }
+}
+
+function validateImportGoldenConfigResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<ImportGoldenConfigResult> {
+  if (!isRecord(result)) {
+    return invalid("ImportGoldenConfig result must be an object");
+  }
+  if (result.workspaceId !== workspace.id) {
+    return metadataMismatch("ImportGoldenConfig result workspace did not match request");
+  }
+  if (!isIsoTimestamp(result.extractedAt)) {
+    return invalid("ImportGoldenConfig extractedAt is invalid");
+  }
+  if (
+    typeof result.fileCount !== "number" ||
+    !Number.isInteger(result.fileCount) ||
+    result.fileCount < 0
+  ) {
+    return invalid("ImportGoldenConfig fileCount is invalid");
+  }
+  if (
+    !Array.isArray(result.warnings) ||
+    result.warnings.length > 50 ||
+    !result.warnings.every(
+      (entry) => typeof entry === "string" && entry.length <= 2000,
+    )
+  ) {
+    return invalid("ImportGoldenConfig warnings are invalid");
+  }
+  return { ok: true, value: result as ImportGoldenConfigResult };
 }
 
 function validateDispatchAgentRunResult(
@@ -1218,7 +1296,8 @@ function isProvisionerErrorCode(value: unknown): value is ProvisionerErrorCode {
     value === "missing_controller_config" ||
     value === "not_implemented" ||
     value === "timeout" ||
-    value === "operation_failed"
+    value === "operation_failed" ||
+    value === "golden_config_failed"
   );
 }
 

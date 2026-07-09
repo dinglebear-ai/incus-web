@@ -37,6 +37,7 @@ import {
 import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { AgentRunDispatch } from "@/components/agent-run-dispatch";
+import { GoldenConfigImport } from "@/components/golden-config-import";
 import { WorkspaceActions } from "@/components/workspace-actions";
 import {
   isLiveState,
@@ -289,9 +290,9 @@ function WorkspaceFeatures({ workspace }: { workspace: Workspace }) {
         />
         <WorkspaceFeature
           icon={UploadIcon}
-          label="MCP import"
+          label="Golden config"
           value="ready"
-          detail="Browser import flow for user config files"
+          detail="Import a ~/.claude + ~/.codex zip below"
           tone="rose"
         />
         <WorkspaceFeature
@@ -417,6 +418,7 @@ function WorkspaceCard({
         />
 
         <WorkspaceFeatures workspace={workspace} />
+        <GoldenConfigImport workspace={workspace} />
         <AgentRunDispatch workspace={workspace} />
         <SetupCompleteNotice workspace={workspace} />
         <SetupProgressPanel workspace={workspace} />

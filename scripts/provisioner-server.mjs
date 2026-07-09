@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, lstat, mkdir, readFile, stat, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
+import { join } from "node:path";
 import {
   agentRunConfigFromEnv,
   createAgentRunStore,
@@ -56,6 +58,21 @@ const statusCacheTtlMs = Number.parseInt(
 );
 const maxConcurrentIncusCommands = Number.parseInt(
   process.env.INCUS_WEB_PROVISIONER_MAX_INCUS_COMMANDS || "4",
+  10,
+);
+// The web app API route (apps/web/app/api/workspaces/[workspaceId]/golden-config/route.ts)
+// stages the uploaded zip here before sending ImportGoldenConfig -- both
+// processes need write/read access to this directory (see
+// ensure_golden_config_staging_dir in scripts/incus-web-lib.sh, which grants
+// it via the same shared INCUS_WEB_PROVISIONER_GROUP the provisioner socket
+// already uses). The command channel itself stays small: the payload only
+// carries a content hash, never a path.
+const goldenConfigDir =
+  process.env.INCUS_WEB_GOLDEN_CONFIG_DIR || "/var/lib/incus-web/golden-config";
+const goldenConfigUser =
+  process.env.INCUS_WEB_WORKSPACE_USER || process.env.WEB_USER || "agent";
+const maxGoldenConfigBytes = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_BYTES || String(150 * 1024 * 1024),
   10,
 );
 let activeIncusCommands = 0;
@@ -586,6 +603,164 @@ async function setWorkspaceLimits(command, options) {
   };
 }
 
+// Mirrors apps/web/lib/provisioner/contracts.ts's
+// validateImportGoldenConfigPayload -- same separate-trust-boundary
+// reasoning as validateLimitsPayload above.
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
+
+function validateGoldenConfigPayload(payload) {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "ImportGoldenConfig payload must be an object";
+  }
+  const allowedKeys = new Set(["sha256Hex"]);
+  for (const key of Object.keys(payload)) {
+    if (!allowedKeys.has(key)) {
+      return "ImportGoldenConfig payload contains unsupported fields";
+    }
+  }
+  if (typeof payload.sha256Hex !== "string" || !SHA256_HEX_PATTERN.test(payload.sha256Hex)) {
+    return "sha256Hex must be a 64-character hex sha256 digest";
+  }
+  return undefined;
+}
+
+function goldenConfigFailure(message) {
+  return Object.assign(new Error(message), { code: "golden_config_failed" });
+}
+
+// The staged path is derived entirely from the workspace tuple already
+// validated by validateWorkspace() above -- the command payload only ever
+// carries a content hash, never a path, so this can't be pointed at an
+// arbitrary host file.
+function stagedGoldenConfigPath(command) {
+  return join(goldenConfigDir, `${command.workspace.id}.zip`);
+}
+
+const GOLDEN_CONFIG_CONTAINER_ZIP_PATH = "/tmp/incus-web-golden-config.zip";
+const GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR = "/tmp/incus-web-golden-config-extract";
+const GOLDEN_CONFIG_MANIFEST_MARKER = "___INCUS_WEB_GOLDEN_CONFIG_MANIFEST___";
+
+// Extraction is a single exec script (rather than one exec call per step)
+// to keep the number of `incus exec` process spawns down for what's
+// already a heavier-than-usual operation. It merges claude/ and codex/
+// from the zip into the workspace user's existing ~/.claude and ~/.codex
+// (cp -a over the top, not a wipe-and-replace) so re-importing an updated
+// golden config doesn't destroy container-local state the export never
+// captured (session sockets, caches, etc. -- see scripts/export-onboarding.mjs
+// for what it deliberately excludes).
+function goldenConfigExtractScript(user) {
+  const home = `/home/${user}`;
+  return [
+    "set -e",
+    `rm -rf ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR}`,
+    `mkdir -p ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR}`,
+    `cd ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR}`,
+    'command -v unzip >/dev/null 2>&1 || { echo "unzip is not installed in this container image" >&2; exit 42; }',
+    `unzip -q -o ${GOLDEN_CONFIG_CONTAINER_ZIP_PATH} -d .`,
+    `mkdir -p ${home}/.claude ${home}/.codex`,
+    `[ -d claude ] && cp -a claude/. ${home}/.claude/ || true`,
+    `[ -d codex ] && cp -a codex/. ${home}/.codex/ || true`,
+    `chown -R ${user}:${user} ${home}/.claude ${home}/.codex`,
+    'find claude codex -type f 2>/dev/null | wc -l',
+    `printf '%s' "${GOLDEN_CONFIG_MANIFEST_MARKER}"`,
+    "cat manifest.json 2>/dev/null || printf '{}'",
+    `cd / && rm -rf ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR} ${GOLDEN_CONFIG_CONTAINER_ZIP_PATH}`,
+  ].join(" && ");
+}
+
+// Matches the manifest.json shape scripts/export-onboarding.mjs writes:
+// `warnings` is already string[] (e.g. an expected top-level item was
+// missing from the source), while `skipped` is an [{path, reason}] array
+// that can run to hundreds of entries (excluded dirs, oversized files) --
+// summarized as a single count here rather than enumerated, to stay well
+// under contracts.ts's validateImportGoldenConfigResult caps (50 entries,
+// 2000 chars each).
+function parseGoldenConfigWarnings(manifestJson) {
+  try {
+    const manifest = JSON.parse(manifestJson);
+    const warnings = Array.isArray(manifest.warnings)
+      ? manifest.warnings.filter((entry) => typeof entry === "string")
+      : [];
+    if (Array.isArray(manifest.skipped) && manifest.skipped.length > 0) {
+      warnings.push(
+        `${manifest.skipped.length} item(s) were skipped during export (see the export's manifest.json for details)`,
+      );
+    }
+    return warnings.slice(0, 50).map((entry) => entry.slice(0, 2000));
+  } catch {
+    return [];
+  }
+}
+
+async function importGoldenConfig(command, options) {
+  const invalidReason = validateGoldenConfigPayload(command.payload);
+  if (invalidReason) {
+    throw Object.assign(new Error(invalidReason), { code: "invalid_input" });
+  }
+
+  const stagedPath = stagedGoldenConfigPath(command);
+  let stagedStat;
+  try {
+    stagedStat = await stat(stagedPath);
+  } catch {
+    throw Object.assign(
+      new Error("no staged golden config upload was found for this workspace"),
+      { code: "invalid_input" },
+    );
+  }
+  if (stagedStat.size > maxGoldenConfigBytes) {
+    throw Object.assign(new Error("staged golden config exceeds the size limit"), {
+      code: "invalid_input",
+    });
+  }
+
+  const content = await readFile(stagedPath);
+  const actualHash = createHash("sha256").update(content).digest("hex");
+  if (actualHash !== command.payload.sha256Hex.toLowerCase()) {
+    throw Object.assign(
+      new Error("staged golden config content did not match the declared sha256Hex"),
+      { code: "invalid_input" },
+    );
+  }
+
+  await pushContainerFile(
+    incusContainer,
+    incusProject,
+    GOLDEN_CONFIG_CONTAINER_ZIP_PATH,
+    content,
+    options,
+  );
+
+  let stdout;
+  try {
+    stdout = await execInAgentContainer(
+      { container: { name: incusContainer, project: incusProject } },
+      goldenConfigExtractScript(goldenConfigUser),
+      options,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw goldenConfigFailure(
+      message.includes("exit status 42") || message.includes("unzip is not installed")
+        ? "unzip is not installed in this container image"
+        : `failed to extract golden config: ${message}`,
+    );
+  }
+
+  const markerIndex = stdout.indexOf(GOLDEN_CONFIG_MANIFEST_MARKER);
+  const fileCountText = (markerIndex === -1 ? stdout : stdout.slice(0, markerIndex)).trim();
+  const manifestJson =
+    markerIndex === -1 ? "{}" : stdout.slice(markerIndex + GOLDEN_CONFIG_MANIFEST_MARKER.length);
+  const fileCount = Number.parseInt(fileCountText, 10);
+
+  return {
+    workspaceId: command.workspace.id,
+    extractedAt: new Date().toISOString(),
+    fileCount: Number.isFinite(fileCount) && fileCount >= 0 ? fileCount : 0,
+    warnings: parseGoldenConfigWarnings(manifestJson),
+  };
+}
+
 function mapIncusState(status, statusCode) {
   if (typeof status === "string") {
     switch (status.toLowerCase()) {
@@ -708,6 +883,12 @@ async function handleCommand(command, options) {
           "succeeded",
           await setWorkspaceLimits(command, options),
         );
+      case "ImportGoldenConfig":
+        return operation(
+          command,
+          "succeeded",
+          await importGoldenConfig(command, options),
+        );
       case "DispatchAgentRun":
         return operation(
           command,
@@ -746,11 +927,11 @@ async function handleCommand(command, options) {
         );
     }
   } catch (err) {
-    if (err && err.code === "invalid_input") {
+    if (err && (err.code === "invalid_input" || err.code === "golden_config_failed")) {
       return operation(
         command,
         "failed",
-        error("invalid_input", err.message, false),
+        error(err.code, err.message, false),
       );
     }
     const message = err instanceof Error ? err.message : String(err);
