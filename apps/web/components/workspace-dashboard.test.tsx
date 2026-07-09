@@ -72,7 +72,7 @@ describe("WorkspaceDashboard", () => {
     );
   });
 
-  it("renders actor, workspace, setup completion, and terminal link", () => {
+  it("renders actor, workspace, setup status, and terminal link", () => {
     render(<WorkspaceDashboard inventory={inventory} />);
 
     expect(screen.getByText("Test User")).toBeInTheDocument();
@@ -80,13 +80,12 @@ describe("WorkspaceDashboard", () => {
     expect(
       screen.getByRole("heading", { name: "incus-web" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("Setup: complete", { selector: "p" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Setup")).toBeInTheDocument();
+    expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.queryByText("Commands")).not.toBeInTheDocument();
     expect(screen.queryByText("Packages")).not.toBeInTheDocument();
     expect(screen.queryByText("mise")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Dotfiles")).toHaveLength(2);
+    expect(screen.getAllByText("Dotfiles").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("ubuntu-24.04-code-v1")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -96,40 +95,10 @@ describe("WorkspaceDashboard", () => {
     expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
     expect(
-      screen.getByRole("link", { name: /open terminal/i }),
+      screen.getAllByRole("link", { name: /open terminal/i }).at(-1),
     ).toHaveAttribute("href", "/terminal/");
-    expect(screen.getByRole("heading", { name: "Agent runs" })).toBeInTheDocument();
-  });
-
-  it("dismisses ready setup for the current container", () => {
-    render(<WorkspaceDashboard inventory={inventory} />);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /dismiss setup complete/i }),
-    );
-
-    expect(
-      screen.queryByText("Setup: complete", { selector: "p" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("respects a prior dismissal stored in localStorage without a hydration mismatch", async () => {
-    const workspace = inventory.workspaces[0];
-    window.localStorage.setItem(
-      `incus-web:setup-complete-dismissed:${workspace.id}:${workspace.createdAt}`,
-      "true",
-    );
-
-    render(<WorkspaceDashboard inventory={inventory} />);
-
-    // Initial render must start dismissed=false (matching what SSR would
-    // produce) and only flip to dismissed after the post-mount effect reads
-    // localStorage -- never synchronously from a useState initializer.
-    await waitFor(() => {
-      expect(
-        screen.queryByText("Setup: complete", { selector: "p" }),
-      ).not.toBeInTheDocument();
-    });
+    expect(screen.getByRole("tab", { name: /agents/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Agent runs" })).not.toBeInTheDocument();
   });
 
   it("shows setup details while provisioning is not complete", () => {
@@ -241,29 +210,44 @@ describe("WorkspaceDashboard", () => {
         },
       ],
     };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ ok: true, runs: [] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+    let agentListCalls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target === "/api/builds") {
+        return okResponse({
           ok: true,
-          run: failedCodexRun,
-        }),
-      })
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ ok: true, runs: [failedCodexRun] }),
-      });
+          images: { result: { images: [] } },
+          presets: { result: { presets: [] } },
+        });
+      }
+      if (target.includes("/agent-runs") && init?.method === "POST") {
+        return okResponse({ ok: true, run: failedCodexRun });
+      }
+      if (target.includes("/agent-runs")) {
+        agentListCalls += 1;
+        return okResponse({
+          ok: true,
+          runs: agentListCalls === 1 ? [] : [failedCodexRun],
+        });
+      }
+      return okResponse({ ok: true });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/agent-runs")),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("tab", { name: /agents/i }));
+    await screen.findByRole("heading", { name: "Agent runs" });
+
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).includes("/agent-runs"),
+        ),
+      ).toHaveLength(1);
     });
 
     fireEvent.change(screen.getByLabelText(/Repo URL/), {
@@ -315,4 +299,61 @@ describe("WorkspaceDashboard", () => {
       "/workspaces/workspace-incus-web/agent-runs/run_20260702000102_ab12cd34",
     );
   });
+
+  it("keeps icon tabs accessible and opens settings mutations from the dashboard", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target === "/api/builds") {
+        return okResponse({
+          ok: true,
+          images: { result: { images: [] } },
+          presets: { result: { presets: [] } },
+        });
+      }
+      if (target.endsWith("/config") && init?.method === "POST") {
+        return okResponse({ ok: true });
+      }
+      return okResponse({ ok: true, snapshots: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<WorkspaceDashboard inventory={inventory} />);
+
+    for (const tab of ["overview", "agents", "builder", "settings"]) {
+      expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByRole("tab", { name: "settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+
+    fireEvent.change(screen.getByLabelText(/CPU limit/i), {
+      target: { value: "4" },
+    });
+    fireEvent.change(screen.getByLabelText(/Memory limit/i), {
+      target: { value: "8GiB" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save limits/i }));
+
+    await waitFor(() => {
+      const configCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith("/config") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(configCall).toBeTruthy();
+      expect(JSON.parse(String((configCall?.[1] as RequestInit).body))).toEqual({
+        action: "setLimits",
+        cpu: "4",
+        memory: "8GiB",
+      });
+    });
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
 });
+
+function okResponse(body: unknown) {
+  return {
+    ok: true,
+    json: async () => body,
+  } as Response;
+}

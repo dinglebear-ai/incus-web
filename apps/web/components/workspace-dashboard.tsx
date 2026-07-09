@@ -2,18 +2,19 @@
 
 import {
   BoxesIcon,
-  CheckCircle2Icon,
   CircleGaugeIcon,
   DatabaseIcon,
   GitBranchIcon,
+  HammerIcon,
+  SettingsIcon,
   SlidersHorizontalIcon,
   ShieldCheckIcon,
   TerminalIcon,
   UserRoundIcon,
-  XIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/aurora/badge";
 import {
@@ -27,11 +28,21 @@ import {
   DescriptionItem,
   DescriptionList,
 } from "@/components/ui/aurora/description-list";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/aurora/tabs";
+import { Button } from "@/components/ui/aurora/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/aurora/tooltip";
 import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
-import { AgentRunDispatch } from "@/components/agent-run-dispatch";
-import { BuilderPanel } from "@/components/builder-panel";
-import { GoldenConfigImport } from "@/components/golden-config-import";
 import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
 import {
@@ -52,7 +63,25 @@ import type {
 
 const ICON_STORAGE =
   '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>';
-const WORKSPACE_TABS = ["containers", "builder", "config"] as const;
+const BuilderPanel = dynamic(
+  () => import("@/components/builder-panel").then((mod) => mod.BuilderPanel),
+  { ssr: false },
+);
+const AgentRunDispatch = lazy(
+  () =>
+    import("@/components/agent-run-dispatch").then(
+      (mod) => ({ default: mod.AgentRunDispatch }),
+    ),
+);
+const WorkspaceSettingsPanel = dynamic(
+  () =>
+    import("@/components/workspace-settings-panel").then(
+      (mod) => mod.WorkspaceSettingsPanel,
+    ),
+  { ssr: false },
+);
+
+const WORKSPACE_TABS = ["overview", "agents", "builder", "settings"] as const;
 type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 function stateTone(state: WorkspaceState) {
@@ -86,6 +115,12 @@ function setupPhaseTone(phase: SetupPhase) {
   return "warn";
 }
 
+function setupStatusTone(phase: SetupPhase) {
+  if (phase === "ready") return "online";
+  if (phase === "failed") return "error";
+  return "syncing";
+}
+
 function setupPhaseLabel(phase: SetupPhase) {
   if (phase === "ready") return "complete";
   return phase.replaceAll("_", " ");
@@ -112,58 +147,6 @@ function SetupCheck({ label, status }: { label: string; status: CheckStatus }) {
         {status}
       </Badge>
     </div>
-  );
-}
-
-function SetupCompleteNotice({ workspace }: { workspace: Workspace }) {
-  const storageKey = `incus-web:setup-complete-dismissed:${workspace.id}:${workspace.createdAt}`;
-  // Start at `false` on both server and client so hydration always matches,
-  // then read the real value from localStorage post-mount. Reading
-  // localStorage inside the useState initializer would run it a second time
-  // during hydration (window defined) after SSR already rendered with a
-  // default of `false`, producing a client/server tree mismatch whenever a
-  // dismissal was previously stored.
-  const [dismissed, setDismissed] = useState(false);
-
-  useEffect(() => {
-    if (window.localStorage.getItem(storageKey) === "true") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDismissed(true);
-    }
-  }, [storageKey]);
-
-  if (workspace.setup.phase !== "ready" || dismissed) {
-    return null;
-  }
-
-  return (
-    <section className="flex items-center justify-between gap-3 rounded-[var(--aurora-radius-2)] border border-[color-mix(in_srgb,var(--aurora-success)_36%,var(--aurora-border-default))] bg-[color-mix(in_srgb,var(--aurora-success)_8%,var(--aurora-control-surface))] px-4 py-3 shadow-[var(--aurora-highlight-medium)]">
-      <div className="flex min-w-0 items-center gap-3">
-        <CheckCircle2Icon
-          aria-hidden="true"
-          className="size-4 shrink-0 text-[var(--aurora-success)]"
-        />
-        <div className="min-w-0">
-          <p className="aurora-text-ui text-[var(--aurora-text-primary)]">
-            Setup: complete
-          </p>
-          <p className="aurora-text-meta">
-            Baseline provisioning finished for this container.
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--aurora-radius-1)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] text-[var(--aurora-text-muted)] transition-colors hover:border-[var(--aurora-border-strong)] hover:text-[var(--aurora-text-primary)]"
-        aria-label="Dismiss setup complete"
-        onClick={() => {
-          window.localStorage.setItem(storageKey, "true");
-          setDismissed(true);
-        }}
-      >
-        <XIcon aria-hidden="true" className="size-3.5" />
-      </button>
-    </section>
   );
 }
 
@@ -211,12 +194,7 @@ function WorkspaceFeature({
   tone?: "cyan" | "success" | "warn";
   href?: string;
 }) {
-  const color =
-    tone === "success"
-      ? "var(--aurora-success)"
-      : tone === "warn"
-        ? "var(--aurora-warn)"
-        : "var(--aurora-accent-primary)";
+  const color = featureToneColor(tone);
   const className =
     "grid min-h-[82px] grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 text-left";
   const content = (
@@ -245,6 +223,17 @@ function WorkspaceFeature({
   }
 
   return <div className={className}>{content}</div>;
+}
+
+function featureToneColor(tone: "cyan" | "success" | "warn") {
+  switch (tone) {
+    case "success":
+      return "var(--aurora-success)";
+    case "warn":
+      return "var(--aurora-warn)";
+    case "cyan":
+      return "var(--aurora-accent-primary)";
+  }
 }
 
 function WorkspaceFeatures({ workspace }: { workspace: Workspace }) {
@@ -283,12 +272,7 @@ function SectionLabel({
   children: ReactNode;
   tone?: "cyan" | "rose" | "success";
 }) {
-  const color =
-    tone === "rose"
-      ? "var(--aurora-accent-pink)"
-      : tone === "success"
-        ? "var(--aurora-success)"
-        : "var(--aurora-accent-primary)";
+  const color = sectionToneColor(tone);
 
   return (
     <div className="flex items-center gap-2">
@@ -298,6 +282,17 @@ function SectionLabel({
       </h2>
     </div>
   );
+}
+
+function sectionToneColor(tone: "cyan" | "rose" | "success") {
+  switch (tone) {
+    case "rose":
+      return "var(--aurora-accent-pink)";
+    case "success":
+      return "var(--aurora-success)";
+    case "cyan":
+      return "var(--aurora-accent-primary)";
+  }
 }
 
 function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
@@ -375,6 +370,7 @@ function WorkspaceCard({
       </CardHeader>
 
       <CardContent className="space-y-5 p-4">
+        <ReadinessRunway workspace={workspace} />
         <WorkspaceTelemetryPanel
           workspace={workspace}
           history={history}
@@ -385,12 +381,56 @@ function WorkspaceCard({
         />
 
         <WorkspaceFeatures workspace={workspace} />
-        <GoldenConfigImport workspace={workspace} />
-        <AgentRunDispatch workspace={workspace} />
-        <SetupCompleteNotice workspace={workspace} />
         <SetupProgressPanel workspace={workspace} />
       </CardContent>
     </Card>
+  );
+}
+
+function ReadinessRunway({ workspace }: { workspace: Workspace }) {
+  const stops = [
+    {
+      label: "Terminal route",
+      value: workspace.terminalUrl ? "ready" : "pending",
+      tone: workspace.terminalUrl ? "online" : "queued",
+    },
+    {
+      label: "Setup",
+      value: setupPhaseLabel(workspace.setup.phase),
+      tone: setupStatusTone(workspace.setup.phase),
+    },
+    {
+      label: "Dotfiles",
+      value: workspace.setup.dotfilesStatus,
+      tone: workspace.setup.dotfilesStatus === "ok" ? "online" : "degraded",
+    },
+    {
+      label: "Workspace",
+      value: workspace.state,
+      tone: stateStatusTone(workspace.state),
+    },
+  ] satisfies Array<{
+    label: string;
+    value: string;
+    tone: React.ComponentProps<typeof StatusIndicator>["tone"];
+  }>;
+
+  return (
+    <section className="grid gap-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-control-surface)] p-3 shadow-[var(--aurora-highlight-medium)] sm:grid-cols-2 xl:grid-cols-4">
+      {stops.map((stop) => (
+        <div
+          key={stop.label}
+          className="min-w-0 border-b border-[var(--aurora-border-default)] pb-2 last:border-b-0 sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3 sm:last:border-r-0"
+        >
+          <p className="aurora-text-meta">{stop.label}</p>
+          <StatusIndicator
+            className="mt-1 max-w-full"
+            tone={stop.tone}
+            label={<span className="truncate">{stop.value}</span>}
+          />
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -478,14 +518,7 @@ function DetailChip({
   value: string;
   tone?: "cyan" | "rose" | "success" | "warn";
 }) {
-  const color =
-    tone === "rose"
-      ? "var(--aurora-accent-pink)"
-      : tone === "success"
-        ? "var(--aurora-success)"
-        : tone === "warn"
-          ? "var(--aurora-warn)"
-          : "var(--aurora-accent-primary)";
+  const color = detailToneColor(tone);
 
   return (
     <span
@@ -498,6 +531,19 @@ function DetailChip({
       </span>
     </span>
   );
+}
+
+function detailToneColor(tone: "cyan" | "rose" | "success" | "warn") {
+  switch (tone) {
+    case "rose":
+      return "var(--aurora-accent-pink)";
+    case "success":
+      return "var(--aurora-success)";
+    case "warn":
+      return "var(--aurora-warn)";
+    case "cyan":
+      return "var(--aurora-accent-primary)";
+  }
 }
 
 function EmptyAccessState({ inventory }: { inventory: WorkspaceInventory }) {
@@ -548,13 +594,14 @@ export function WorkspaceDashboard({
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(
     inventory.workspaces[0]?.id,
   );
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("containers");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
 
   return (
     <main className="aurora-page-shell min-h-screen text-[var(--aurora-text-primary)]">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-3 px-4 py-4 md:px-6 lg:px-8">
-        <header className="flex flex-col gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-4 py-3 md:flex-row md:items-center md:justify-between">
+      <TooltipProvider>
+      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-3 px-3 py-3 md:px-6 lg:px-8">
+        <header className="flex flex-col gap-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-4 py-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-[4px] border border-[var(--aurora-border-strong)] bg-[var(--aurora-control-surface)]">
               <BoxesIcon
@@ -568,7 +615,7 @@ export function WorkspaceDashboard({
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
+          <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex md:justify-end">
             <DetailChip
               icon={CircleGaugeIcon}
               label="Workspaces"
@@ -603,50 +650,106 @@ export function WorkspaceDashboard({
           {inventory.workspaces.length > 0 ? (
             <>
               <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
-                <nav className="space-y-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-3">
+                <nav className="aurora-nav-shell hidden space-y-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] p-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] lg:block">
+                  <p className="aurora-text-label px-1 text-[var(--aurora-text-muted)]">
+                    Workspaces
+                  </p>
                   {inventory.workspaces.map((workspace) => (
-                    <button
+                    <div
                       key={workspace.id}
-                      type="button"
-                      className={`w-full rounded-[4px] border px-3 py-2 text-left aurora-text-ui ${
+                      className={`grid gap-1 rounded-[8px] border px-3 py-2 transition ${
                         workspace.id === primaryWorkspace?.id
-                          ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)]"
-                          : "border-[var(--aurora-border-default)]"
+                          ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)] shadow-[var(--aurora-active-glow)]"
+                          : "border-[var(--aurora-border-default)] hover:border-[var(--aurora-border-strong)] hover:bg-[var(--aurora-hover-bg)]"
                       }`}
-                      onClick={() => setActiveWorkspaceId(workspace.id)}
                     >
-                      {workspace.name}
-                    </button>
+                      <button
+                        type="button"
+                        className="min-w-0 text-left aurora-text-ui"
+                        onClick={() => setActiveWorkspaceId(workspace.id)}
+                      >
+                        <span className="block truncate">{workspace.name}</span>
+                      </button>
+                      <span className="flex items-center justify-between gap-2">
+                        <Badge tone={stateTone(workspace.state)} shape="tag">
+                          {workspace.state}
+                        </Badge>
+                        {workspace.terminalUrl ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                asChild
+                                size="icon"
+                                variant="ghost"
+                                aria-label={`Open terminal for ${workspace.name}`}
+                              >
+                                <a href={workspace.terminalUrl}>
+                                  <TerminalIcon aria-hidden="true" className="size-4" />
+                                </a>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Open terminal</TooltipContent>
+                          </Tooltip>
+                        ) : null}
+                      </span>
+                    </div>
                   ))}
                 </nav>
-                <div className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
+                <Tabs
+                  value={activeTab}
+                  onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
+                  className="min-w-0"
+                >
+                  <TabsList className="grid grid-cols-4 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-2 pt-1 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] sm:inline-flex">
                     {WORKSPACE_TABS.map((tab) => (
-                      <button
+                      <TabsTrigger
                         key={tab}
-                        type="button"
-                        className={`rounded-[4px] border px-3 py-2 aurora-text-ui ${
-                          activeTab === tab
-                            ? "border-[var(--aurora-accent-primary)] bg-[var(--aurora-control-surface)]"
-                            : "border-[var(--aurora-border-default)]"
-                        }`}
+                        value={tab}
+                        aria-label={tab}
+                        className="justify-center capitalize"
                         onClick={() => setActiveTab(tab)}
                       >
-                        {tab}
-                      </button>
+                        {tabIcon(tab)}
+                        <span className="hidden sm:inline">{tab}</span>
+                      </TabsTrigger>
                     ))}
-                  </div>
-                  {activeTab === "containers" && primaryWorkspace ? (
-                    <WorkspacePane
-                      key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                      workspace={primaryWorkspace}
-                    />
-                  ) : null}
-                  {activeTab === "builder" ? <BuilderPanel /> : null}
-                  {activeTab === "config" && primaryWorkspace ? (
-                    <ReadOnlyConfig workspace={primaryWorkspace} />
-                  ) : null}
-                </div>
+                  </TabsList>
+                  <TabsContent value="overview">
+                    {primaryWorkspace ? (
+                      <WorkspacePane
+                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                        workspace={primaryWorkspace}
+                      />
+                    ) : null}
+                  </TabsContent>
+                  <TabsContent value="agents">
+                    {primaryWorkspace ? (
+                      <div
+                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                        className="min-w-0"
+                      >
+                        <Suspense fallback={<p className="aurora-text-meta">Loading agent runs…</p>}>
+                          <AgentRunDispatch workspace={primaryWorkspace} />
+                        </Suspense>
+                      </div>
+                    ) : null}
+                  </TabsContent>
+                  <TabsContent value="builder" forceMount>
+                    <div className="min-w-0">
+                      <BuilderPanel />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="settings">
+                    {primaryWorkspace ? (
+                      <div
+                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                        className="min-w-0"
+                      >
+                        <WorkspaceSettingsPanel workspace={primaryWorkspace} />
+                      </div>
+                    ) : null}
+                  </TabsContent>
+                </Tabs>
               </div>
             </>
           ) : (
@@ -655,26 +758,25 @@ export function WorkspaceDashboard({
         </section>
 
       </div>
+      </TooltipProvider>
     </main>
   );
 }
 
-function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
-  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+function tabIcon(tab: WorkspaceTab) {
+  const className = "size-3.5";
+  switch (tab) {
+    case "overview":
+      return <CircleGaugeIcon aria-hidden="true" className={className} />;
+    case "agents":
+      return <GitBranchIcon aria-hidden="true" className={className} />;
+    case "builder":
+      return <HammerIcon aria-hidden="true" className={className} />;
+    case "settings":
+      return <SettingsIcon aria-hidden="true" className={className} />;
+  }
 }
 
-function ReadOnlyConfig({ workspace }: { workspace: Workspace }) {
-  return (
-    <section className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4">
-      <SectionLabel icon={SlidersHorizontalIcon}>Config</SectionLabel>
-      <DescriptionList className="mt-3 bg-transparent">
-        <DescriptionItem label="Access mode" value={workspace.terminalUrl ? "configured" : "pending"} active={Boolean(workspace.terminalUrl)} />
-        <DescriptionItem label="Network bridge" value={workspace.networkBridge ?? "unknown"} />
-        <DescriptionItem label="Resource profile" value={workspace.resourceProfileId} />
-        <DescriptionItem label="CPU limit" value={workspace.resources.effectiveCpu ?? "profile default"} />
-        <DescriptionItem label="Memory limit" value={workspace.resources.effectiveMemory ?? "profile default"} />
-        <DescriptionItem label="Workspace host path" value={workspace.workspaceHostPath ?? "profile default"} />
-      </DescriptionList>
-    </section>
-  );
+function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
+  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
 }
