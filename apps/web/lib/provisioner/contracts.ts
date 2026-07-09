@@ -9,6 +9,7 @@ export const PROVISIONER_COMMAND_TYPES = [
   "RunSetup",
   "DispatchAgentRun",
   "ListAgentRuns",
+  "SetWorkspaceLimits",
 ] as const;
 
 // Command types that mutate workspace configuration (resource limits,
@@ -16,12 +17,12 @@ export const PROVISIONER_COMMAND_TYPES = [
 // route through the stricter apps/web/lib/workspaces/provisioner.ts
 // getMutableWorkspaceRefForActor authorization check instead of the plain
 // owner check, requiring INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION=1 in
-// shared-prototype mode. Empty today -- no such command exists yet in
-// PROVISIONER_COMMAND_TYPES above (e.g. a future "SetWorkspaceLimits").
-// `satisfies` ties every entry to a real command type at compile time, so
-// a typo or a since-removed command type here is a build error, not a
-// silent runtime gap.
-export const MUTATING_COMMAND_TYPES = [] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
+// shared-prototype mode. `satisfies` ties every entry to a real command
+// type at compile time, so a typo or a since-removed command type here is
+// a build error, not a silent runtime gap.
+export const MUTATING_COMMAND_TYPES = [
+  "SetWorkspaceLimits",
+] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
 
 const PROVISIONER_WORKSPACE_STATES = [
   "creating",
@@ -168,6 +169,11 @@ export type RestartWorkspacePayload = {
   timeoutSeconds: number;
 };
 
+export type SetWorkspaceLimitsPayload = {
+  cpu?: string;
+  memory?: string;
+};
+
 export type RunSetupPayload = {
   dotfilesRepo?: string;
   ageKey?: {
@@ -257,6 +263,8 @@ export type LifecycleWorkspaceResult = {
   status?: WorkspaceRuntimeStatus;
 };
 
+export type SetWorkspaceLimitsResult = LifecycleWorkspaceResult;
+
 export type RunSetupResult = {
   workspaceId: WorkspaceId;
   setup: ProvisionerSetupSummary;
@@ -282,6 +290,7 @@ export type ProvisionerCommandPayloadMap = {
   RunSetup: RunSetupPayload;
   DispatchAgentRun: DispatchAgentRunPayload;
   ListAgentRuns: ListAgentRunsPayload;
+  SetWorkspaceLimits: SetWorkspaceLimitsPayload;
 };
 
 export type ProvisionerCommandResultMap = {
@@ -293,6 +302,7 @@ export type ProvisionerCommandResultMap = {
   RunSetup: RunSetupResult;
   DispatchAgentRun: DispatchAgentRunResult;
   ListAgentRuns: ListAgentRunsResult;
+  SetWorkspaceLimits: SetWorkspaceLimitsResult;
 };
 
 export type ProvisionerCommand<
@@ -759,6 +769,8 @@ function validateCommandPayload(
       return validateDispatchAgentRunPayload(payload);
     case "ListAgentRuns":
       return validateListAgentRunsPayload(payload);
+    case "SetWorkspaceLimits":
+      return validateSetWorkspaceLimitsPayload(payload);
   }
 }
 
@@ -815,6 +827,37 @@ function validateRestartWorkspacePayload(
   return { ok: true, value: payload as RestartWorkspacePayload };
 }
 
+const CPU_LIMIT_PATTERN = /^\d+(\.\d+)?$/;
+const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b?$/i;
+
+function validateSetWorkspaceLimitsPayload(
+  payload: unknown,
+): ValidationResult<SetWorkspaceLimitsPayload> {
+  if (!isRecord(payload)) {
+    return invalid("SetWorkspaceLimits payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["cpu", "memory"])) {
+    return invalid("SetWorkspaceLimits payload contains unsupported fields");
+  }
+  if (
+    payload.cpu !== undefined &&
+    (typeof payload.cpu !== "string" ||
+      payload.cpu.length === 0 ||
+      !CPU_LIMIT_PATTERN.test(payload.cpu))
+  ) {
+    return invalid("cpu must be a non-negative number string");
+  }
+  if (
+    payload.memory !== undefined &&
+    (typeof payload.memory !== "string" ||
+      payload.memory.length === 0 ||
+      !MEMORY_LIMIT_PATTERN.test(payload.memory))
+  ) {
+    return invalid("memory must be a byte-size string like 4GiB or 512MB");
+  }
+  return { ok: true, value: payload as SetWorkspaceLimitsPayload };
+}
+
 function validateEmptyPayload(
   payload: unknown,
 ): ValidationResult<StartWorkspacePayload | GetWorkspaceStatusPayload> {
@@ -848,6 +891,8 @@ function validateOperationResult(
       return validateDispatchAgentRunResult(result, workspace);
     case "ListAgentRuns":
       return validateListAgentRunsResult(result, workspace);
+    case "SetWorkspaceLimits":
+      return validateSetWorkspaceLimitsResult(result, workspace);
   }
 }
 
@@ -930,6 +975,28 @@ function validateLifecycleWorkspaceResult(
     }
   }
   return { ok: true, value: result as LifecycleWorkspaceResult };
+}
+
+function validateSetWorkspaceLimitsResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<SetWorkspaceLimitsResult> {
+  if (!isRecord(result)) {
+    return invalid("SetWorkspaceLimits result must be an object");
+  }
+  if (result.workspaceId !== workspace.id) {
+    return metadataMismatch("SetWorkspaceLimits result workspace did not match request");
+  }
+  if (result.state !== "running" && result.state !== "stopped") {
+    return invalid("SetWorkspaceLimits result state is invalid");
+  }
+  if (result.status !== undefined) {
+    const status = validateWorkspaceRuntimeStatus(result.status, workspace);
+    if (!status.ok) {
+      return status;
+    }
+  }
+  return { ok: true, value: result as SetWorkspaceLimitsResult };
 }
 
 function validateRunSetupResult(
