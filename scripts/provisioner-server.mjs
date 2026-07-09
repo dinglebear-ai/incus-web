@@ -491,6 +491,34 @@ async function restartWorkspace(command, options) {
   };
 }
 
+async function setWorkspaceLimits(command, options) {
+  const cpu = command.payload?.cpu;
+  const memory = command.payload?.memory;
+
+  if (cpu !== undefined) {
+    await incusText(["config", "set", incusContainer, `limits.cpu=${cpu}`], options);
+  } else {
+    // "unset" on a key that is already unset exits non-zero (Incus treats
+    // it as an error, not a no-op) -- optionalText tolerates that so
+    // clearing an already-clear limit is idempotent instead of failing.
+    await optionalText(["config", "unset", incusContainer, "limits.cpu"], options);
+  }
+
+  if (memory !== undefined) {
+    await incusText(["config", "set", incusContainer, `limits.memory=${memory}`], options);
+  } else {
+    await optionalText(["config", "unset", incusContainer, "limits.memory"], options);
+  }
+
+  statusCache = undefined;
+  const status = await getWorkspaceStatus(command, options);
+  return {
+    workspaceId: command.workspace.id,
+    state: status.state === "running" ? "running" : "stopped",
+    status,
+  };
+}
+
 function mapIncusState(status, statusCode) {
   if (typeof status === "string") {
     switch (status.toLowerCase()) {
@@ -606,6 +634,12 @@ async function handleCommand(command, options) {
           command,
           "succeeded",
           await restartWorkspace(command, options),
+        );
+      case "SetWorkspaceLimits":
+        return operation(
+          command,
+          "succeeded",
+          await setWorkspaceLimits(command, options),
         );
       case "DispatchAgentRun":
         return operation(
