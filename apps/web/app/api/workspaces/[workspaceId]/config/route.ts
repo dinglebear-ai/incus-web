@@ -42,23 +42,7 @@ export async function POST(request: Request, context: RouteContext) {
     return jsonError("invalid_action", "action is required", 400);
   }
 
-  const operation =
-    body.action === "setLimits"
-      ? await sendWorkspaceCommand(actor, "SetWorkspaceLimits", {
-          ...(typeof body.cpu === "string" && body.cpu.trim()
-            ? { cpu: body.cpu.trim() }
-            : {}),
-          ...(typeof body.memory === "string" && body.memory.trim()
-            ? { memory: body.memory.trim() }
-            : {}),
-        })
-      : body.action === "setMount"
-        ? await sendWorkspaceCommand(actor, "SetWorkspaceMount", {
-            hostPath: typeof body.hostPath === "string" ? body.hostPath.trim() : "",
-          })
-        : body.action === "clearMount"
-          ? await sendWorkspaceCommand(actor, "ClearWorkspaceMount", {})
-          : undefined;
+  const operation = await runConfigAction(actor, body);
 
   if (!operation) {
     return jsonError("invalid_action", "unsupported workspace config action", 400);
@@ -76,4 +60,32 @@ export async function POST(request: Request, context: RouteContext) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function runConfigAction(
+  actor: Parameters<typeof sendWorkspaceCommand>[0],
+  body: Record<string, unknown>,
+) {
+  switch (body.action) {
+    case "setLimits": {
+      const cpu = trimmedString(body.cpu);
+      const memory = trimmedString(body.memory);
+      return sendWorkspaceCommand(actor, "SetWorkspaceLimits", {
+        ...(cpu ? { cpu } : {}),
+        ...(memory ? { memory } : {}),
+      });
+    }
+    case "setMount":
+      return sendWorkspaceCommand(actor, "SetWorkspaceMount", {
+        hostPath: trimmedString(body.hostPath) ?? "",
+      });
+    case "clearMount":
+      return sendWorkspaceCommand(actor, "ClearWorkspaceMount", {});
+    default:
+      return undefined;
+  }
+}
+
+function trimmedString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

@@ -559,21 +559,17 @@ ensure_host_node() {
 }
 
 validate_host_node_version() {
-  local version
-  local major
-  local minor
-
-  version="$("$INCUS_WEB_PROVISIONER_NODE" --version 2>/dev/null | sed 's/^v//')"
-  major="${version%%.*}"
-  minor="${version#*.}"
-  minor="${minor%%.*}"
-  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || die "failed to parse host Node.js version from $INCUS_WEB_PROVISIONER_NODE --version"
-  if (( major < 20 || (major == 20 && minor < 9) )); then
-    die "host web app requires Node.js >=20.9.0 for Next.js 16; $INCUS_WEB_PROVISIONER_NODE is v$version"
-  fi
+  validate_node_min_version 20 9 "host web app requires Node.js >=20.9.0 for Next.js 16"
 }
 
 validate_build_worker_node_version() {
+  validate_node_min_version 22 5 "build worker requires Node.js >=22.5.0 for node:sqlite"
+}
+
+validate_node_min_version() {
+  local min_major="$1"
+  local min_minor="$2"
+  local requirement="$3"
   local version
   local major
   local minor
@@ -583,8 +579,8 @@ validate_build_worker_node_version() {
   minor="${version#*.}"
   minor="${minor%%.*}"
   [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || die "failed to parse host Node.js version from $INCUS_WEB_PROVISIONER_NODE --version"
-  if (( major < 22 || (major == 22 && minor < 5) )); then
-    die "build worker requires Node.js >=22.5.0 for node:sqlite; $INCUS_WEB_PROVISIONER_NODE is v$version"
+  if (( major < min_major || (major == min_major && minor < min_minor) )); then
+    die "$requirement; $INCUS_WEB_PROVISIONER_NODE is v$version"
   fi
 }
 

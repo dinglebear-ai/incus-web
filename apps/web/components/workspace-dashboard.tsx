@@ -52,6 +52,8 @@ import type {
 
 const ICON_STORAGE =
   '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>';
+const WORKSPACE_TABS = ["containers", "builder", "config"] as const;
+type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 function stateTone(state: WorkspaceState) {
   if (state === "running") return "success";
@@ -546,8 +548,8 @@ export function WorkspaceDashboard({
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(
     inventory.workspaces[0]?.id,
   );
-  const [activeTab, setActiveTab] = useState<"containers" | "builder" | "config">("containers");
-  const primaryWorkspace = inventory.workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? inventory.workspaces[0];
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("containers");
+  const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
 
   return (
     <main className="aurora-page-shell min-h-screen text-[var(--aurora-text-primary)]">
@@ -619,7 +621,7 @@ export function WorkspaceDashboard({
                 </nav>
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-2">
-                    {(["containers", "builder", "config"] as const).map((tab) => (
+                    {WORKSPACE_TABS.map((tab) => (
                       <button
                         key={tab}
                         type="button"
@@ -655,6 +657,10 @@ export function WorkspaceDashboard({
       </div>
     </main>
   );
+}
+
+function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
+  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
 }
 
 function ReadOnlyConfig({ workspace }: { workspace: Workspace }) {

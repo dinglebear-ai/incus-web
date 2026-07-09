@@ -114,6 +114,24 @@ export type ProvisionerErrorCode =
   | "operation_failed"
   | "golden_config_failed";
 
+const PROVISIONER_ERROR_CODES = [
+  "invalid_input",
+  "unauthenticated_service",
+  "mutation_not_authorized",
+  "metadata_mismatch",
+  "invalid_state",
+  "template_unavailable",
+  "incus_unavailable",
+  "zfs_unavailable",
+  "quota_failed",
+  "setup_failed",
+  "missing_controller_config",
+  "not_implemented",
+  "timeout",
+  "operation_failed",
+  "golden_config_failed",
+] as const satisfies readonly ProvisionerErrorCode[];
+
 export type ProvisionerError = {
   code: ProvisionerErrorCode;
   message: string;
@@ -410,10 +428,7 @@ export type ProvisionerOperation<
 export function isProvisionerCommandType(
   value: unknown,
 ): value is ProvisionerCommandType {
-  return (
-    typeof value === "string" &&
-    PROVISIONER_COMMAND_TYPES.includes(value as ProvisionerCommandType)
-  );
+  return isKnownString(value, PROVISIONER_COMMAND_TYPES);
 }
 
 export function validateGeneratedName(
@@ -1352,49 +1367,31 @@ function isAgeIdentity(value: string): boolean {
 }
 
 function isWorkspaceState(value: unknown): value is ProvisionerWorkspaceState {
-  return (
-    typeof value === "string" &&
-    PROVISIONER_WORKSPACE_STATES.includes(value as ProvisionerWorkspaceState)
-  );
+  return isKnownString(value, PROVISIONER_WORKSPACE_STATES);
 }
 
 function isProvisionerSetupPhase(
   value: unknown,
 ): value is ProvisionerSetupPhase {
-  return (
-    typeof value === "string" &&
-    PROVISIONER_SETUP_PHASES.includes(value as ProvisionerSetupPhase)
-  );
+  return isKnownString(value, PROVISIONER_SETUP_PHASES);
 }
 
 function isAgentRunAgent(value: unknown): value is AgentRunAgent {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_AGENTS.includes(value as AgentRunAgent)
-  );
+  return isKnownString(value, AGENT_RUN_AGENTS);
 }
 
 function isAgentRunContainerState(
   value: unknown,
 ): value is AgentRunContainerState {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_CONTAINER_STATES.includes(value as AgentRunContainerState)
-  );
+  return isKnownString(value, AGENT_RUN_CONTAINER_STATES);
 }
 
 function isAgentRunPhase(value: unknown): value is AgentRunPhase {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_PHASES.includes(value as AgentRunPhase)
-  );
+  return isKnownString(value, AGENT_RUN_PHASES);
 }
 
 function isAgentRunStatus(value: unknown): value is AgentRunStatus {
-  return (
-    typeof value === "string" &&
-    AGENT_RUN_STATUSES.includes(value as AgentRunStatus)
-  );
+  return isKnownString(value, AGENT_RUN_STATUSES);
 }
 
 function isAgentRunContainer(value: unknown): value is AgentRunContainer {
@@ -1416,7 +1413,7 @@ function isAgentRunContainer(value: unknown): value is AgentRunContainer {
 function isAgentRunController(value: unknown): value is AgentRunController {
   return (
     isRecord(value) &&
-    AGENT_CONTROLLER_KINDS.includes(value.kind as AgentControllerKind) &&
+    isKnownString(value.kind, AGENT_CONTROLLER_KINDS) &&
     (value.sessionId === undefined || typeof value.sessionId === "string") &&
     (value.turnId === undefined || typeof value.turnId === "string") &&
     (value.url === undefined || typeof value.url === "string")
@@ -1438,10 +1435,7 @@ function validateIncusInstanceName(value: string): boolean {
 }
 
 function isOperationStatus(value: unknown): value is OperationStatus {
-  return (
-    typeof value === "string" &&
-    OPERATION_STATUSES.includes(value as OperationStatus)
-  );
+  return isKnownString(value, OPERATION_STATUSES);
 }
 
 function isProvisionerError(value: unknown): value is ProvisionerError {
@@ -1456,23 +1450,7 @@ function isProvisionerError(value: unknown): value is ProvisionerError {
 }
 
 function isProvisionerErrorCode(value: unknown): value is ProvisionerErrorCode {
-  return (
-    value === "invalid_input" ||
-    value === "unauthenticated_service" ||
-    value === "mutation_not_authorized" ||
-    value === "metadata_mismatch" ||
-    value === "invalid_state" ||
-    value === "template_unavailable" ||
-    value === "incus_unavailable" ||
-    value === "zfs_unavailable" ||
-    value === "quota_failed" ||
-    value === "setup_failed" ||
-    value === "missing_controller_config" ||
-    value === "not_implemented" ||
-    value === "timeout" ||
-    value === "operation_failed" ||
-    value === "golden_config_failed"
-  );
+  return isKnownString(value, PROVISIONER_ERROR_CODES);
 }
 
 function hasOptionalNonNegativeNumber(value: unknown): boolean {
@@ -1534,6 +1512,13 @@ function sanitizeRecord(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isKnownString<const TValues extends readonly string[]>(
+  value: unknown,
+  values: TValues,
+): value is TValues[number] {
+  return typeof value === "string" && values.includes(value);
 }
 
 function hasOnlyKeys(

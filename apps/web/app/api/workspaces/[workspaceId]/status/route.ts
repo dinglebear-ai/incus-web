@@ -89,15 +89,18 @@ function appendTelemetrySample(
   workspaceId: string,
   workspace: ReturnType<typeof statusToWorkspace>,
 ) {
-  const memoryPercent =
-    workspace.metrics.memoryUsedBytes !== undefined &&
-    workspace.metrics.memoryLimitBytes !== undefined &&
-    workspace.metrics.memoryLimitBytes > 0
-      ? Math.min(100, Math.round((workspace.metrics.memoryUsedBytes / workspace.metrics.memoryLimitBytes) * 100))
-      : undefined;
-  const cpuPercent =
-    workspace.metrics.loadAverage?.[0] !== undefined && workspace.metrics.cpuCount
-      ? Math.min(100, Math.round((workspace.metrics.loadAverage[0] / workspace.metrics.cpuCount) * 100))
-      : undefined;
+  const memoryPercent = percentOf(
+    workspace.metrics.memoryUsedBytes,
+    workspace.metrics.memoryLimitBytes,
+  );
+  const cpuPercent = percentOf(
+    workspace.metrics.loadAverage?.[0],
+    workspace.metrics.cpuCount,
+  );
   return appendTelemetry(workspaceId, { cpuPercent, memoryPercent });
+}
+
+function percentOf(value: number | undefined, total: number | undefined) {
+  if (value === undefined || total === undefined || total <= 0) return undefined;
+  return Math.min(100, Math.round((value / total) * 100));
 }

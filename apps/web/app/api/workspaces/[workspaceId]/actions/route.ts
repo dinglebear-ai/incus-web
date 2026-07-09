@@ -47,17 +47,7 @@ export async function POST(request: Request, context: RouteContext) {
     return jsonError("workspace_not_found", "workspace was not found", 404);
   }
 
-  const operation =
-    body.action === "start"
-      ? await sendWorkspaceCommand(actor, "StartWorkspace", {})
-      : body.action === "stop"
-        ? await sendWorkspaceCommand(actor, "StopWorkspace", {
-            force: false,
-            timeoutSeconds: 30,
-          })
-        : await sendWorkspaceCommand(actor, "RestartWorkspace", {
-            timeoutSeconds: 30,
-          });
+  const operation = await runWorkspaceAction(actor, body.action);
 
   if (operation.status !== "succeeded") {
     recordWorkspaceActivity(workspaceId, actor, body.action, "failed");
@@ -94,6 +84,25 @@ async function readActionBody(
 
 function isWorkspaceAction(value: unknown): value is WorkspaceAction {
   return value === "start" || value === "stop" || value === "restart";
+}
+
+function runWorkspaceAction(
+  actor: Parameters<typeof sendWorkspaceCommand>[0],
+  action: WorkspaceAction,
+) {
+  switch (action) {
+    case "start":
+      return sendWorkspaceCommand(actor, "StartWorkspace", {});
+    case "stop":
+      return sendWorkspaceCommand(actor, "StopWorkspace", {
+        force: false,
+        timeoutSeconds: 30,
+      });
+    case "restart":
+      return sendWorkspaceCommand(actor, "RestartWorkspace", {
+        timeoutSeconds: 30,
+      });
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

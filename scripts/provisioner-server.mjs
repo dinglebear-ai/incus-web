@@ -581,22 +581,33 @@ async function restartWorkspace(command, options) {
 // rejected instead of silently failing at the `incus config set` boundary.
 const CPU_LIMIT_PATTERN = /^\d+$/;
 const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
+const LIMIT_PAYLOAD_KEYS = ["cpu", "memory"];
+const MOUNT_PAYLOAD_KEYS = ["hostPath"];
+const SNAPSHOT_PAYLOAD_KEYS = ["name"];
+const GOLDEN_CONFIG_PAYLOAD_KEYS = ["sha256Hex"];
 
 function isPositiveLimitValue(value) {
   const numeric = Number.parseFloat(value);
   return Number.isFinite(numeric) && numeric > 0;
 }
 
-function validateLimitsPayload(payload) {
+function validatePayloadObject(payload, commandName, allowedKeys) {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    return "SetWorkspaceLimits payload must be an object";
+    return `${commandName} payload must be an object`;
   }
-  const allowedKeys = new Set(["cpu", "memory"]);
+  const allowed = new Set(allowedKeys);
   for (const key of Object.keys(payload)) {
-    if (!allowedKeys.has(key)) {
-      return "SetWorkspaceLimits payload contains unsupported fields";
+    if (!allowed.has(key)) {
+      return `${commandName} payload contains unsupported fields`;
     }
   }
+  return undefined;
+}
+
+function validateLimitsPayload(payload) {
+  const invalidReason = validatePayloadObject(payload, "SetWorkspaceLimits", LIMIT_PAYLOAD_KEYS);
+  if (invalidReason) return invalidReason;
+
   const cpu = payload.cpu;
   const memory = payload.memory;
   if (
@@ -621,15 +632,9 @@ function validateLimitsPayload(payload) {
 }
 
 function validateMountPayload(payload) {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    return "SetWorkspaceMount payload must be an object";
-  }
-  const allowedKeys = new Set(["hostPath"]);
-  for (const key of Object.keys(payload)) {
-    if (!allowedKeys.has(key)) {
-      return "SetWorkspaceMount payload contains unsupported fields";
-    }
-  }
+  const invalidReason = validatePayloadObject(payload, "SetWorkspaceMount", MOUNT_PAYLOAD_KEYS);
+  if (invalidReason) return invalidReason;
+
   if (
     typeof payload.hostPath !== "string" ||
     payload.hostPath.length === 0 ||
@@ -645,15 +650,9 @@ function validateMountPayload(payload) {
 const SNAPSHOT_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,62}$/i;
 
 function validateSnapshotPayload(payload) {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    return "CreateWorkspaceSnapshot payload must be an object";
-  }
-  const allowedKeys = new Set(["name"]);
-  for (const key of Object.keys(payload)) {
-    if (!allowedKeys.has(key)) {
-      return "CreateWorkspaceSnapshot payload contains unsupported fields";
-    }
-  }
+  const invalidReason = validatePayloadObject(payload, "CreateWorkspaceSnapshot", SNAPSHOT_PAYLOAD_KEYS);
+  if (invalidReason) return invalidReason;
+
   if (
     payload.name !== undefined &&
     (typeof payload.name !== "string" ||
@@ -732,12 +731,7 @@ async function setWorkspaceLimits(command, options) {
   }
 
   invalidateWorkspaceStatus(command);
-  const status = await getWorkspaceStatus(command, options);
-  return {
-    workspaceId: command.workspace.id,
-    state: status.state === "running" ? "running" : "stopped",
-    status,
-  };
+  return workspaceStatusResult(command, options);
 }
 
 async function setWorkspaceMount(command, options) {
@@ -754,12 +748,7 @@ async function setWorkspaceMount(command, options) {
   ], options);
 
   invalidateWorkspaceStatus(command);
-  const status = await getWorkspaceStatus(command, options);
-  return {
-    workspaceId: command.workspace.id,
-    state: status.state === "running" ? "running" : "stopped",
-    status,
-  };
+  return workspaceStatusResult(command, options);
 }
 
 async function clearWorkspaceMount(command, options) {
@@ -778,6 +767,10 @@ async function clearWorkspaceMount(command, options) {
   );
 
   invalidateWorkspaceStatus(command);
+  return workspaceStatusResult(command, options);
+}
+
+async function workspaceStatusResult(command, options) {
   const status = await getWorkspaceStatus(command, options);
   return {
     workspaceId: command.workspace.id,
@@ -844,15 +837,9 @@ async function createWorkspaceSnapshot(command, options) {
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 
 function validateGoldenConfigPayload(payload) {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    return "ImportGoldenConfig payload must be an object";
-  }
-  const allowedKeys = new Set(["sha256Hex"]);
-  for (const key of Object.keys(payload)) {
-    if (!allowedKeys.has(key)) {
-      return "ImportGoldenConfig payload contains unsupported fields";
-    }
-  }
+  const invalidReason = validatePayloadObject(payload, "ImportGoldenConfig", GOLDEN_CONFIG_PAYLOAD_KEYS);
+  if (invalidReason) return invalidReason;
+
   if (typeof payload.sha256Hex !== "string" || !SHA256_HEX_PATTERN.test(payload.sha256Hex)) {
     return "sha256Hex must be a 64-character hex sha256 digest";
   }

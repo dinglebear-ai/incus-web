@@ -204,12 +204,7 @@ main() {
       configure_host_provisioner "$CONTAINER_NAME"
       configure_build_worker
       configure_host_web_app
-      log "ready"
-      log "container: $CONTAINER_NAME"
-      log "workspace: $HOST_WORKSPACE -> $CONTAINER_WORKSPACE"
-      log "access mode: $ACCESS_MODE"
-      [[ "$ACCESS_MODE" == "tailscale" ]] && log "tailnet host: $TS_HOSTNAME"
-      [[ "$ACCESS_MODE" == "oidc" ]] && log "public URL: $PUBLIC_URL"
+      log_deploy_summary
       return
     fi
   fi
@@ -238,6 +233,10 @@ main() {
   configure_build_worker
   configure_host_web_app
 
+  log_deploy_summary
+}
+
+log_deploy_summary() {
   log "ready"
   log "container: $CONTAINER_NAME"
   log "workspace: $HOST_WORKSPACE -> $CONTAINER_WORKSPACE"

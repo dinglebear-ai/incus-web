@@ -85,21 +85,21 @@ function database(): SQLiteDatabase | undefined {
 }
 
 export function recordActivity(entry: WorkspaceActivityEntry) {
-  const database = databaseOrFallback();
-  if (!database) {
+  const store = database();
+  if (!store) {
     recordActivityInMemory(entry);
     return;
   }
 
   try {
-    database
+    store
       .prepare(
         `INSERT INTO workspace_activity
           (workspace_id, at, actor_user_id, actor_email, action, status)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(entry.workspaceId, entry.at, entry.actorUserId, entry.actorEmail, entry.action, entry.status);
-    database
+    store
       .prepare(
         `DELETE FROM workspace_activity
          WHERE workspace_id = ?
@@ -117,11 +117,11 @@ export function recordActivity(entry: WorkspaceActivityEntry) {
 }
 
 export function listActivity(workspaceId: string): WorkspaceActivityEntry[] {
-  const database = databaseOrFallback();
-  if (!database) return memoryActivity.get(workspaceId) ?? [];
+  const store = database();
+  if (!store) return memoryActivity.get(workspaceId) ?? [];
 
   try {
-    return database
+    return store
       .prepare(
         `SELECT at, workspace_id, actor_user_id, actor_email, action, status
          FROM workspace_activity
@@ -148,17 +148,13 @@ export function appendTelemetry(
   sample: WorkspaceTelemetrySample,
 ): WorkspaceTelemetrySample[] {
   const entry = { at: new Date().toISOString(), ...sample };
-  const database = databaseOrFallback();
-  if (!database) {
-    const next = [...(memoryTelemetry.get(workspaceId) ?? []), entry].slice(
-      -MAX_TELEMETRY_SAMPLES,
-    );
-    memoryTelemetry.set(workspaceId, next);
-    return next;
+  const store = database();
+  if (!store) {
+    return appendTelemetryInMemory(workspaceId, entry);
   }
 
   try {
-    database
+    store
       .prepare(
         `INSERT INTO workspace_telemetry
           (workspace_id, sampled_at, cpu_percent, memory_percent)
@@ -170,7 +166,7 @@ export function appendTelemetry(
         entry.cpuPercent ?? null,
         entry.memoryPercent ?? null,
       );
-    database
+    store
       .prepare(
         `DELETE FROM workspace_telemetry
          WHERE workspace_id = ?
@@ -189,11 +185,11 @@ export function appendTelemetry(
 }
 
 export function listTelemetry(workspaceId: string): WorkspaceTelemetrySample[] {
-  const database = databaseOrFallback();
-  if (!database) return memoryTelemetry.get(workspaceId) ?? [];
+  const store = database();
+  if (!store) return memoryTelemetry.get(workspaceId) ?? [];
 
   try {
-    return database
+    return store
       .prepare(
         `SELECT sampled_at, cpu_percent, memory_percent
          FROM workspace_telemetry
@@ -216,10 +212,6 @@ export function listTelemetry(workspaceId: string): WorkspaceTelemetrySample[] {
   } catch {
     return memoryTelemetry.get(workspaceId) ?? [];
   }
-}
-
-function databaseOrFallback() {
-  return database();
 }
 
 function recordActivityInMemory(entry: WorkspaceActivityEntry) {

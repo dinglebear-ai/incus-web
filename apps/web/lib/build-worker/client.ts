@@ -102,13 +102,7 @@ function requestJson(
         try {
           const parsed = JSON.parse(payload || "{}");
           if (statusCode < 200 || statusCode >= 300) {
-            const message =
-              isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === "string"
-                ? parsed.error.message
-                : isRecord(parsed) && typeof parsed.message === "string"
-                  ? parsed.message
-                  : `build worker returned HTTP ${statusCode}`;
-            resolve({ ok: false, message });
+            resolve({ ok: false, message: responseErrorMessage(parsed, statusCode) });
             return;
           }
           resolve({ ok: true, body: parsed });
@@ -121,6 +115,16 @@ function requestJson(
     req.on("error", reject);
     req.end(body);
   });
+}
+
+function responseErrorMessage(parsed: unknown, statusCode: number) {
+  if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === "string") {
+    return parsed.error.message;
+  }
+  if (isRecord(parsed) && typeof parsed.message === "string") {
+    return parsed.message;
+  }
+  return `build worker returned HTTP ${statusCode}`;
 }
 
 function isOperationForCommand<TType extends BuildWorkerCommandType>(

@@ -24,6 +24,25 @@ const commandTimeoutMs = Number.parseInt(
   10,
 );
 const maxBodyBytes = Number.parseInt(process.env.INCUS_WEB_BUILD_WORKER_MAX_BODY_BYTES || "262144", 10);
+const commandTypes = [
+  "DispatchBuildImage",
+  "GetBuildStatus",
+  "ListBuildImages",
+  "SetBuildImageMaster",
+  "ListBuildPresets",
+  "SaveBuildPreset",
+];
+const dispatchPayloadKeys = [
+  "distro",
+  "release",
+  "packages",
+  "postInstallCommands",
+  "definitionYaml",
+  "imageAlias",
+  "idempotencyKey",
+  "basedOn",
+];
+const savePresetPayloadKeys = ["name", "distro", "release", "packages", "postInstallCommands"];
 
 await mkdir(dirname(socketPath), { recursive: true });
 await mkdir(stateDir, { recursive: true });
@@ -482,18 +501,7 @@ function validateCommand(command) {
 }
 
 function validateDispatchPayload(payload) {
-  if (
-    !hasOnlyKeys(payload, [
-      "distro",
-      "release",
-      "packages",
-      "postInstallCommands",
-      "definitionYaml",
-      "imageAlias",
-      "idempotencyKey",
-      "basedOn",
-    ])
-  ) {
+  if (!hasOnlyKeys(payload, dispatchPayloadKeys)) {
     return error("invalid_input", "DispatchBuildImage payload contains unsupported fields");
   }
   if (
@@ -523,7 +531,7 @@ function validateGetStatusPayload(payload) {
 
 function validateSavePresetPayload(payload) {
   if (
-    !hasOnlyKeys(payload, ["name", "distro", "release", "packages", "postInstallCommands"]) ||
+    !hasOnlyKeys(payload, savePresetPayloadKeys) ||
     !string(payload.name, 80) ||
     !string(payload.distro, 40) ||
     !string(payload.release, 80) ||
@@ -536,14 +544,7 @@ function validateSavePresetPayload(payload) {
 }
 
 function isCommandType(value) {
-  return [
-    "DispatchBuildImage",
-    "GetBuildStatus",
-    "ListBuildImages",
-    "SetBuildImageMaster",
-    "ListBuildPresets",
-    "SaveBuildPreset",
-  ].includes(value);
+  return commandTypes.includes(value);
 }
 
 function validAlias(value) {

@@ -99,6 +99,18 @@ export type SaveBuildPresetResult = {
   preset: BuilderPreset;
 };
 
+const DISPATCH_KEYS = [
+  "distro",
+  "release",
+  "packages",
+  "postInstallCommands",
+  "definitionYaml",
+  "imageAlias",
+  "idempotencyKey",
+  "basedOn",
+] as const;
+const SAVE_PRESET_KEYS = ["name", "distro", "release", "packages", "postInstallCommands"] as const;
+
 export type BuildWorkerPayloadMap = {
   DispatchBuildImage: DispatchBuildImagePayload;
   GetBuildStatus: GetBuildStatusPayload;
@@ -191,18 +203,7 @@ export function validateBuildWorkerCommand(
 
 function validateDispatch(command: Record<string, unknown>) {
   const payload = command.payload as Record<string, unknown>;
-  if (
-    !hasOnlyKeys(payload, [
-      "distro",
-      "release",
-      "packages",
-      "postInstallCommands",
-      "definitionYaml",
-      "imageAlias",
-      "idempotencyKey",
-      "basedOn",
-    ])
-  ) {
+  if (!hasOnlyKeys(payload, DISPATCH_KEYS)) {
     return { ok: false as const, message: "DispatchBuildImage payload contains unsupported fields" };
   }
   if (
@@ -247,7 +248,7 @@ function validateSetMaster(command: Record<string, unknown>) {
 function validateSavePreset(command: Record<string, unknown>) {
   const payload = command.payload as Record<string, unknown>;
   if (
-    !hasOnlyKeys(payload, ["name", "distro", "release", "packages", "postInstallCommands"]) ||
+    !hasOnlyKeys(payload, SAVE_PRESET_KEYS) ||
     !stringValue(payload.name, 80) ||
     !stringValue(payload.distro, 40) ||
     !stringValue(payload.release, 80) ||
@@ -271,7 +272,7 @@ function arrayOfStrings(value: unknown, maxItems: number, maxLength: number) {
   );
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, keys: string[]) {
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]) {
   const allowed = new Set(keys);
   return Object.keys(value).every((key) => allowed.has(key));
 }

@@ -84,14 +84,14 @@ export function BuilderPanel() {
         distro,
         release,
         packages,
-        postInstallCommands: postInstall.split("\n").map((entry) => entry.trim()).filter(Boolean),
+        postInstallCommands: postInstallCommands(postInstall),
         imageAlias,
         idempotencyKey: crypto.randomUUID(),
       }),
     });
     const body = await response.json();
     if (!response.ok || body?.ok !== true) {
-      setMessage(body?.operation?.error?.message ?? body?.error?.message ?? "build dispatch failed");
+      setMessage(apiErrorMessage(body, "build dispatch failed"));
       return;
     }
     const buildId = body.operation.result.buildId as string;
@@ -127,12 +127,12 @@ export function BuilderPanel() {
         distro,
         release,
         packages,
-        postInstallCommands: postInstall.split("\n").map((entry) => entry.trim()).filter(Boolean),
+        postInstallCommands: postInstallCommands(postInstall),
       }),
     });
     const body = await response.json().catch(() => undefined);
     if (!response.ok || body?.ok !== true) {
-      setMessage(body?.operation?.error?.message ?? body?.error?.message ?? "preset save failed");
+      setMessage(apiErrorMessage(body, "preset save failed"));
       return;
     }
     setMessage("Preset saved");
@@ -174,6 +174,11 @@ export function BuilderPanel() {
     setMessage(`${imported.tools.length} mise tool pin(s) imported`);
   }
 
+  function handleDistroChange(next: string) {
+    setDistro(next);
+    setRelease(BUILDER_DISTROS.find((entry) => entry.id === next)?.releases[0]?.id ?? "trixie");
+  }
+
   return (
     <section className="space-y-4 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4">
       <div className="flex items-center justify-between gap-3">
@@ -185,11 +190,7 @@ export function BuilderPanel() {
       </div>
 
       <div className="grid gap-3 md:grid-cols-4">
-        <select className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2" value={distro} onChange={(event) => {
-          const next = event.target.value;
-          setDistro(next);
-          setRelease(BUILDER_DISTROS.find((entry) => entry.id === next)?.releases[0]?.id ?? "trixie");
-        }}>
+        <select className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2" value={distro} onChange={(event) => handleDistroChange(event.target.value)}>
           {BUILDER_DISTROS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
         </select>
         <select className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2" value={release} onChange={(event) => setRelease(event.target.value)}>
@@ -287,4 +288,23 @@ export function BuilderPanel() {
       </div>
     </section>
   );
+}
+
+function postInstallCommands(value: string) {
+  return value.split("\n").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function apiErrorMessage(body: unknown, fallback: string) {
+  if (!body || typeof body !== "object") return fallback;
+  const payload = body as {
+    operation?: { error?: { message?: unknown } };
+    error?: { message?: unknown };
+  };
+  return stringMessage(payload.operation?.error?.message)
+    ?? stringMessage(payload.error?.message)
+    ?? fallback;
+}
+
+function stringMessage(value: unknown) {
+  return typeof value === "string" && value ? value : undefined;
 }

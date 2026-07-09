@@ -30,22 +30,12 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void fetch(`/api/workspaces/${workspace.id}/activity`, {
-        headers: { "Cache-Control": "no-store" },
-      })
-        .then((response) => response.json())
-        .then((body) => {
-          if (Array.isArray(body?.activity)) setActivity(body.activity);
-        })
-        .catch(() => undefined);
-      void fetch(`/api/workspaces/${workspace.id}/snapshots`, {
-        headers: { "Cache-Control": "no-store" },
-      })
-        .then((response) => response.json())
-        .then((body) => {
-          if (Array.isArray(body?.snapshots)) setSnapshots(body.snapshots);
-        })
-        .catch(() => undefined);
+      void fetchNoStore(`/api/workspaces/${workspace.id}/activity`).then((body) => {
+        if (Array.isArray(body?.activity)) setActivity(body.activity);
+      });
+      void fetchNoStore(`/api/workspaces/${workspace.id}/snapshots`).then((body) => {
+        if (Array.isArray(body?.snapshots)) setSnapshots(body.snapshots);
+      });
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [workspace.id]);
@@ -61,7 +51,7 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
       });
       const body = await response.json().catch(() => undefined);
       if (!response.ok || body?.ok !== true) {
-        throw new Error(body?.operation?.error?.message ?? body?.error?.message ?? "configuration update failed");
+        throw new Error(apiErrorMessage(body, "configuration update failed"));
       }
       setMessage("Saved");
       router.refresh();
@@ -83,7 +73,7 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
       });
       const body = await response.json().catch(() => undefined);
       if (!response.ok || body?.ok !== true) {
-        throw new Error(body?.operation?.error?.message ?? body?.error?.message ?? "snapshot failed");
+        throw new Error(apiErrorMessage(body, "snapshot failed"));
       }
       setMessage("Snapshot created");
       setSnapshotName("");
@@ -203,4 +193,30 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
       </section>
     </aside>
   );
+}
+
+async function fetchNoStore(url: string) {
+  try {
+    const response = await fetch(url, {
+      headers: { "Cache-Control": "no-store" },
+    });
+    return await response.json();
+  } catch {
+    return undefined;
+  }
+}
+
+function apiErrorMessage(body: unknown, fallback: string) {
+  if (!body || typeof body !== "object") return fallback;
+  const payload = body as {
+    operation?: { error?: { message?: unknown } };
+    error?: { message?: unknown };
+  };
+  return stringMessage(payload.operation?.error?.message)
+    ?? stringMessage(payload.error?.message)
+    ?? fallback;
+}
+
+function stringMessage(value: unknown) {
+  return typeof value === "string" && value ? value : undefined;
 }
