@@ -15,6 +15,7 @@ import {
   DescriptionList,
 } from "@/components/ui/aurora/description-list";
 import { Input } from "@/components/ui/aurora/input";
+import { apiErrorMessage } from "@/lib/api-error-message";
 import type { Workspace } from "@/lib/workspaces/types";
 
 export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
@@ -206,19 +207,4 @@ async function fetchNoStore(url: string) {
     throw new Error(apiErrorMessage(body, `failed to load ${url}`));
   }
   return body;
-}
-
-function apiErrorMessage(body: unknown, fallback: string) {
-  if (!body || typeof body !== "object") return fallback;
-  const payload = body as {
-    operation?: { error?: { message?: unknown } };
-    error?: { message?: unknown };
-  };
-  return stringMessage(payload.operation?.error?.message)
-    ?? stringMessage(payload.error?.message)
-    ?? fallback;
-}
-
-function stringMessage(value: unknown) {
-  return typeof value === "string" && value ? value : undefined;
 }

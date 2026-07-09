@@ -21,6 +21,7 @@ describe("builds route", () => {
     headersMock.mockResolvedValue(
       new Headers({ "x-auth-request-email": "test@example.com" }),
     );
+    vi.unstubAllEnvs();
   });
 
   it("requires identity before listing builds", async () => {
@@ -35,6 +36,7 @@ describe("builds route", () => {
   });
 
   it("sends a tenant-scoped image alias on dispatch", async () => {
+    vi.stubEnv("INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS", "test@example.com");
     sendBuildWorkerCommand.mockResolvedValue({
       id: "op-1",
       requestId: "req-test",
@@ -68,6 +70,33 @@ describe("builds route", () => {
         }),
       }),
     );
+  });
+
+  it("requires a trusted builder for privileged build actions in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("INCUS_WEB_TRUSTED_PROXY_SECRET", "shh");
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-auth-request-email": "test@example.com",
+        "x-incus-web-proxy-secret": "shh",
+      }),
+    );
+
+    const response = await POST(
+      new Request("http://localhost/api/builds", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "dispatch",
+          distro: "debian",
+          release: "trixie",
+          packages: ["git"],
+          postInstallCommands: [],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(sendBuildWorkerCommand).not.toHaveBeenCalled();
   });
 
   it("rejects invalid packages before worker dispatch", async () => {

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/aurora/button";
 import { Badge } from "@/components/ui/aurora/badge";
 import { Input } from "@/components/ui/aurora/input";
 import { Textarea } from "@/components/ui/aurora/textarea";
+import { apiErrorMessage } from "@/lib/api-error-message";
 import { BUILDER_DISTROS } from "@/lib/builder/distros";
 import { parseDevcontainerJson } from "@/lib/import/devcontainer";
 import { importMiseToml, importToolVersionsFile } from "@/lib/import/mise";
@@ -312,19 +313,4 @@ export function BuilderPanel() {
 
 function postInstallCommands(value: string) {
   return value.split("\n").map((entry) => entry.trim()).filter(Boolean);
-}
-
-function apiErrorMessage(body: unknown, fallback: string) {
-  if (!body || typeof body !== "object") return fallback;
-  const payload = body as {
-    operation?: { error?: { message?: unknown } };
-    error?: { message?: unknown };
-  };
-  return stringMessage(payload.operation?.error?.message)
-    ?? stringMessage(payload.error?.message)
-    ?? fallback;
-}
-
-function stringMessage(value: unknown) {
-  return typeof value === "string" && value ? value : undefined;
 }

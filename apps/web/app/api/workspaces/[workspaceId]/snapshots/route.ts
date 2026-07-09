@@ -1,18 +1,7 @@
-import { headers } from "next/headers";
-
-import {
-  AuthenticationRequiredError,
-  getActorFromHeaders,
-} from "@/lib/auth/identity";
-import {
-  getMutableWorkspaceRefForActor,
-  getWorkspaceRefForActor,
-  sendWorkspaceCommand,
-} from "@/lib/workspaces/provisioner";
+import { sendWorkspaceCommand } from "@/lib/workspaces/provisioner";
 import { recordWorkspaceActivity } from "@/lib/workspaces/activity";
 import {
-  jsonError,
-  provisionerError,
+  requireWorkspaceActor,
   statusForProvisionerError,
 } from "@/lib/workspaces/route-helpers";
 
@@ -23,22 +12,9 @@ type RouteContext = {
 };
 
 export async function GET(_request: Request, context: RouteContext) {
-  let actor;
-  try {
-    actor = getActorFromHeaders(await headers());
-  } catch (error) {
-    if (error instanceof AuthenticationRequiredError) {
-      return jsonError("authentication_required", error.message, 401);
-    }
-    throw error;
-  }
-
-  const { workspaceId } = await context.params;
-  const access = getWorkspaceRefForActor(actor);
-  if (!access.ok) return provisionerError(access.error);
-  if (access.workspace.id !== workspaceId) {
-    return jsonError("workspace_not_found", "workspace was not found", 404);
-  }
+  const route = await requireWorkspaceActor(context);
+  if (!route.ok) return route.response;
+  const { actor } = route;
 
   const operation = await sendWorkspaceCommand(actor, "ListWorkspaceSnapshots", {});
   if (operation.status !== "succeeded") {
@@ -51,22 +27,9 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 export async function POST(request: Request, context: RouteContext) {
-  let actor;
-  try {
-    actor = getActorFromHeaders(await headers());
-  } catch (error) {
-    if (error instanceof AuthenticationRequiredError) {
-      return jsonError("authentication_required", error.message, 401);
-    }
-    throw error;
-  }
-
-  const { workspaceId } = await context.params;
-  const access = getMutableWorkspaceRefForActor(actor);
-  if (!access.ok) return provisionerError(access.error);
-  if (access.workspace.id !== workspaceId) {
-    return jsonError("workspace_not_found", "workspace was not found", 404);
-  }
+  const route = await requireWorkspaceActor(context, { mutable: true });
+  if (!route.ok) return route.response;
+  const { actor, workspaceId } = route;
 
   const body = await request.json().catch(() => undefined);
   const name = isRecord(body) && typeof body.name === "string" ? body.name.trim() : undefined;

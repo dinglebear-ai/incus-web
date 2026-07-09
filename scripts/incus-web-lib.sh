@@ -1154,6 +1154,10 @@ write_host_web_app_env() {
   if [[ "${ENABLE_BUILD_WORKER:-0}" == "1" ]]; then
     validate_systemd_env_value INCUS_WEB_BUILD_WORKER_TOKEN "$INCUS_WEB_BUILD_WORKER_TOKEN"
     validate_systemd_env_value INCUS_WEB_BUILD_WORKER_SOCKET "$INCUS_WEB_BUILD_WORKER_SOCKET"
+    validate_systemd_env_value INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS "${INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS:-0}"
+    if [[ -n "${INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS:-}" ]]; then
+      validate_env_file_value INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS "$INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS"
+    fi
   fi
   if [[ -n "$INCUS_WEB_TERMINAL_URL" ]]; then
     validate_env_file_value INCUS_WEB_TERMINAL_URL "$INCUS_WEB_TERMINAL_URL"
@@ -1177,6 +1181,10 @@ write_host_web_app_env() {
     if [[ "${ENABLE_BUILD_WORKER:-0}" == "1" ]]; then
       printf 'INCUS_WEB_BUILD_WORKER_TOKEN=%s\n' "$INCUS_WEB_BUILD_WORKER_TOKEN"
       printf 'INCUS_WEB_BUILD_WORKER_SOCKET=%s\n' "$INCUS_WEB_BUILD_WORKER_SOCKET"
+      printf 'INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS=%s\n' "${INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS:-0}"
+      if [[ -n "${INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS:-}" ]]; then
+        printf 'INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS=%s\n' "$INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS"
+      fi
     fi
     if [[ -n "$INCUS_WEB_TERMINAL_URL" ]]; then
       printf 'INCUS_WEB_TERMINAL_URL=%s\n' "$INCUS_WEB_TERMINAL_URL"
@@ -1198,6 +1206,15 @@ write_build_worker_env() {
   validate_systemd_env_value INCUS_WEB_BUILD_WORKER_SOCKET "$INCUS_WEB_BUILD_WORKER_SOCKET"
   validate_systemd_env_value INCUS_WEB_BUILD_WORKER_SOCKET_MODE "$INCUS_WEB_BUILD_WORKER_SOCKET_MODE"
   validate_env_file_value INCUS_WEB_BUILD_WORKER_STATE_DIR "$INCUS_WEB_BUILD_WORKER_STATE_DIR"
+  for name in \
+    INCUS_WEB_BUILD_WORKER_MAX_LOG_CHUNK_BYTES \
+    INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD \
+    INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS \
+    INCUS_WEB_BUILD_WORKER_MAX_STDERR_TAIL_BYTES; do
+    if [[ -n "${!name:-}" ]]; then
+      validate_systemd_env_value "$name" "${!name}"
+    fi
+  done
 
   tmp_file="$(mktemp)"
   chmod 600 "$tmp_file"
@@ -1208,6 +1225,15 @@ write_build_worker_env() {
     printf 'INCUS_WEB_BUILD_WORKER_STATE_DIR=%s\n' "$INCUS_WEB_BUILD_WORKER_STATE_DIR"
     printf 'INCUS_WEB_BUILD_WORKER_DB=%s\n' "$INCUS_WEB_BUILD_WORKER_STATE_DIR/builds.sqlite3"
     printf 'INCUS_WEB_BUILD_WORKER_WORK_DIR=%s\n' "$INCUS_WEB_BUILD_WORKER_STATE_DIR/work"
+    for name in \
+      INCUS_WEB_BUILD_WORKER_MAX_LOG_CHUNK_BYTES \
+      INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD \
+      INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS \
+      INCUS_WEB_BUILD_WORKER_MAX_STDERR_TAIL_BYTES; do
+      if [[ -n "${!name:-}" ]]; then
+        printf '%s=%s\n' "$name" "${!name}"
+      fi
+    done
   } >"$tmp_file"
 
   sudo_cmd install -d -m 750 -g "$INCUS_WEB_PROVISIONER_GROUP" "$(dirname "$INCUS_WEB_BUILD_WORKER_ENV_FILE")"
@@ -1218,7 +1244,7 @@ write_build_worker_env() {
 wait_for_build_worker() {
   for _ in {1..30}; do
     if sudo_cmd systemctl is-active --quiet incus-web-build-worker &&
-      sudo_cmd curl -fsS --max-time 3 --unix-socket "$INCUS_WEB_BUILD_WORKER_SOCKET" http://localhost/healthz >/dev/null 2>&1; then
+      sudo_cmd curl -fsS --max-time 10 --unix-socket "$INCUS_WEB_BUILD_WORKER_SOCKET" http://localhost/readyz >/dev/null 2>&1; then
       return
     fi
     sleep 1

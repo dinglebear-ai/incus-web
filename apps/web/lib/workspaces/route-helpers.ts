@@ -1,4 +1,41 @@
+import { headers } from "next/headers";
+
+import {
+  AuthenticationRequiredError,
+  getActorFromHeaders,
+} from "@/lib/auth/identity";
 import type { ProvisionerError } from "@/lib/provisioner/contracts";
+import {
+  getMutableWorkspaceRefForActor,
+  getWorkspaceRefForActor,
+} from "@/lib/workspaces/provisioner";
+
+type WorkspaceRouteContext = {
+  params: Promise<{ workspaceId: string }>;
+};
+
+export async function requireWorkspaceActor(
+  context: WorkspaceRouteContext,
+  { mutable = false }: { mutable?: boolean } = {},
+) {
+  let actor;
+  try {
+    actor = getActorFromHeaders(await headers());
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      return { ok: false as const, response: jsonError("authentication_required", error.message, 401) };
+    }
+    throw error;
+  }
+
+  const { workspaceId } = await context.params;
+  const access = mutable ? getMutableWorkspaceRefForActor(actor) : getWorkspaceRefForActor(actor);
+  if (!access.ok) return { ok: false as const, response: provisionerError(access.error) };
+  if (access.workspace.id !== workspaceId) {
+    return { ok: false as const, response: jsonError("workspace_not_found", "workspace was not found", 404) };
+  }
+  return { ok: true as const, actor, workspace: access.workspace, workspaceId };
+}
 
 export function jsonError(code: string, message: string, status: number) {
   return Response.json({ ok: false, error: { code, message } }, { status });

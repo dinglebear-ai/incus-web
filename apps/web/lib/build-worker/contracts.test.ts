@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
   BUILD_WORKER_CONTRACT_VERSION,
+  BUILD_WORKER_COMMAND_TYPES,
   isBuildImageAlias,
   type BuildWorkerCommand,
   validateBuildWorkerCommand,
@@ -17,6 +22,30 @@ const command: BuildWorkerCommand<"GetBuildStatus"> = {
 };
 
 describe("build worker contracts", () => {
+  it("keeps script command lists aligned with the TS contract", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const workerSource = readFileSync(join(here, "../../../../scripts/build-worker.mjs"), "utf8");
+
+    expect(readStringArrayConst(workerSource, "commandTypes")).toEqual(BUILD_WORKER_COMMAND_TYPES);
+    expect(readStringArrayConst(workerSource, "dispatchPayloadKeys")).toEqual([
+      "distro",
+      "release",
+      "packages",
+      "postInstallCommands",
+      "definitionYaml",
+      "imageAlias",
+      "idempotencyKey",
+      "basedOn",
+    ]);
+    expect(readStringArrayConst(workerSource, "savePresetPayloadKeys")).toEqual([
+      "name",
+      "distro",
+      "release",
+      "packages",
+      "postInstallCommands",
+    ]);
+  });
+
   it("keeps the TS image alias predicate aligned with the worker", () => {
     expect(isBuildImageAlias("incus-web-abc_debian:trixie.1")).toBe(true);
     expect(isBuildImageAlias("-bad")).toBe(false);
@@ -82,3 +111,9 @@ describe("build worker contracts", () => {
     ).toBe(false);
   });
 });
+
+function readStringArrayConst(source: string, name: string) {
+  const match = source.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
+  if (!match) throw new Error(`missing ${name}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}

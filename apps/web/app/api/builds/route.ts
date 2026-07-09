@@ -24,6 +24,14 @@ export async function POST(request: Request) {
   if (!isRecord(body)) return jsonError("invalid_request", "request body must be JSON", 400);
   const action = typeof body.action === "string" ? body.action : "dispatch";
 
+  if (["dispatch", "savePreset", "setMaster"].includes(action) && !canUseBuildWorker(actor.actor)) {
+    return jsonError(
+      "build_worker_forbidden",
+      "image build actions require a trusted builder",
+      403,
+    );
+  }
+
   if (action === "dispatch") {
     const parsed = dispatchPayload(body);
     if (!parsed.ok) return jsonError("invalid_build", parsed.message, 400);
@@ -121,6 +129,18 @@ function imageAliasForActor(actor: { userId: string }, requestedAlias: string) {
     .replace(/^-+/, "")
     .slice(0, 80) || "custom";
   return `incus-web-${owner}-${alias}`.slice(0, 119);
+}
+
+function canUseBuildWorker(actor: { userId: string; email: string }) {
+  if (process.env.INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS === "1") return true;
+  const allowlist = (process.env.INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS || "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowlist.length === 0) {
+    return process.env.NODE_ENV !== "production";
+  }
+  return allowlist.includes(actor.userId.toLowerCase()) || allowlist.includes(actor.email.toLowerCase());
 }
 
 function stringField(value: unknown, fallback: string) {

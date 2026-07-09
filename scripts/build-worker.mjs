@@ -24,6 +24,22 @@ const commandTimeoutMs = Number.parseInt(
   10,
 );
 const maxBodyBytes = Number.parseInt(process.env.INCUS_WEB_BUILD_WORKER_MAX_BODY_BYTES || "262144", 10);
+const maxLogChunkBytes = Number.parseInt(
+  process.env.INCUS_WEB_BUILD_WORKER_MAX_LOG_CHUNK_BYTES || String(256 * 1024),
+  10,
+);
+const maxLogBytesPerBuild = Number.parseInt(
+  process.env.INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD || String(20 * 1024 * 1024),
+  10,
+);
+const maxCompletedBuilds = Number.parseInt(
+  process.env.INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS || "100",
+  10,
+);
+const maxStderrTailBytes = Number.parseInt(
+  process.env.INCUS_WEB_BUILD_WORKER_MAX_STDERR_TAIL_BYTES || String(64 * 1024),
+  10,
+);
 const commandTypes = [
   "DispatchBuildImage",
   "GetBuildStatus",
@@ -43,6 +59,7 @@ const dispatchPayloadKeys = [
   "basedOn",
 ];
 const savePresetPayloadKeys = ["name", "distro", "release", "packages", "postInstallCommands"];
+let buildRunnerActive = false;
 
 await mkdir(dirname(socketPath), { recursive: true });
 await mkdir(stateDir, { recursive: true });
@@ -75,6 +92,8 @@ db.exec(`
     chunk TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS build_logs_build_id_offset_idx
+    ON build_logs(build_id, offset);
   CREATE TABLE IF NOT EXISTS image_registry (
     image_alias TEXT PRIMARY KEY,
     owner_user_id TEXT NOT NULL,
@@ -101,6 +120,18 @@ db.exec(`
 const server = createServer(async (req, res) => {
   if (req.url === "/healthz") {
     send(res, 200, { status: "ok" });
+    return;
+  }
+  if (req.url === "/readyz") {
+    try {
+      await preflight();
+      send(res, 200, { status: "ok" });
+    } catch (error) {
+      send(res, 503, {
+        status: "failed",
+        message: error instanceof Error ? error.message : "build worker preflight failed",
+      });
+    }
     return;
   }
   if (req.method !== "POST" || req.url !== "/v1/builds") {
@@ -193,9 +224,7 @@ async function dispatchBuild(command) {
     now,
   );
 
-  void runBuild(buildId).catch((err) => {
-    failBuild(buildId, err instanceof Error ? err.message : String(err));
-  });
+  processNextBuild();
 
   return { buildId };
 }
@@ -313,12 +342,12 @@ function savePreset(command) {
 async function runBuild(buildId) {
   const row = db.prepare("SELECT * FROM builds WHERE id = ?").get(buildId);
   if (!row) return;
-  updateBuild(buildId, "running", { startedAt: new Date().toISOString() });
-  appendLog(buildId, "running preflight checks\n");
-  await preflight();
   await acquireLock();
   const dir = await mkdtemp(join(tmpdir(), "incus-web-build-"));
   try {
+    updateBuild(buildId, "running", { startedAt: new Date().toISOString() });
+    appendLog(buildId, "running preflight checks\n");
+    await preflight();
     const definitionPath = join(dir, "definition.yaml");
     await writeFile(definitionPath, row.definition_yaml, { mode: 0o600 });
     appendLog(buildId, `starting distrobuilder for ${row.image_alias}\n`);
@@ -341,10 +370,35 @@ async function runBuild(buildId) {
     });
     tx();
     appendLog(buildId, `build succeeded: ${row.image_alias}\n`);
+    pruneCompletedBuilds();
   } finally {
     await releaseLock();
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function processNextBuild() {
+  if (buildRunnerActive) return;
+  buildRunnerActive = true;
+  setImmediate(async () => {
+    try {
+      while (true) {
+        const next = db
+          .prepare("SELECT id FROM builds WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1")
+          .get();
+        if (!next) return;
+        try {
+          await runBuild(next.id);
+        } catch (err) {
+          failBuild(next.id, err instanceof Error ? err.message : String(err));
+        }
+      }
+    } finally {
+      buildRunnerActive = false;
+      const queued = db.prepare("SELECT id FROM builds WHERE status = 'queued' LIMIT 1").get();
+      if (queued) processNextBuild();
+    }
+  });
 }
 
 async function preflight() {
@@ -374,6 +428,7 @@ function updateBuild(buildId, status, { startedAt, completedAt, error: errorText
 function failBuild(buildId, message) {
   updateBuild(buildId, "failed", { completedAt: new Date().toISOString(), error: message });
   appendLog(buildId, `build failed: ${message}\n`);
+  pruneCompletedBuilds();
 }
 
 function appendLog(buildId, text) {
@@ -388,6 +443,7 @@ function appendLog(buildId, text) {
     text,
     new Date().toISOString(),
   );
+  pruneBuildLogs(buildId);
 }
 
 function readLogSince(buildId, since) {
@@ -399,10 +455,83 @@ function readLogSince(buildId, since) {
   for (const row of rows) {
     const start = Math.max(0, since - row.offset);
     const part = row.chunk.slice(start);
+    const remaining = maxLogChunkBytes - Buffer.byteLength(chunk, "utf8");
+    if (remaining <= 0) break;
+    if (Buffer.byteLength(part, "utf8") > remaining) {
+      const clipped = clipUtf8(part, remaining);
+      chunk += clipped;
+      offset = row.offset + start + clipped.length;
+      break;
+    }
     chunk += part;
     offset = row.offset + row.chunk.length;
   }
   return { chunk, offset };
+}
+
+function pruneBuildLogs(buildId) {
+  const rows = db
+    .prepare("SELECT rowid, offset, length(chunk) AS size FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
+    .all(buildId);
+  let total = rows.reduce((sum, row) => sum + Number(row.size || 0), 0);
+  let removed = 0;
+  for (const row of rows) {
+    if (total <= maxLogBytesPerBuild) break;
+    db.prepare("DELETE FROM build_logs WHERE rowid = ?").run(row.rowid);
+    total -= Number(row.size || 0);
+    removed += 1;
+  }
+  if (removed > 0) {
+    const first = db
+      .prepare("SELECT offset FROM build_logs WHERE build_id = ? ORDER BY offset ASC LIMIT 1")
+      .get(buildId);
+    if (first && !hasTruncationMarker(buildId)) {
+      const marker = `[log truncated to last ${maxLogBytesPerBuild} bytes]\n`;
+      const markerOffset = Math.max(0, Number(first.offset) - marker.length);
+      db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
+        buildId,
+        markerOffset,
+        marker,
+        new Date().toISOString(),
+      );
+    }
+  }
+}
+
+function hasTruncationMarker(buildId) {
+  return Boolean(
+    db
+      .prepare("SELECT 1 FROM build_logs WHERE build_id = ? AND chunk LIKE '[log truncated%' LIMIT 1")
+      .get(buildId),
+  );
+}
+
+function pruneCompletedBuilds() {
+  if (!Number.isFinite(maxCompletedBuilds) || maxCompletedBuilds <= 0) return;
+  const rows = db
+    .prepare(
+      `SELECT id FROM builds
+       WHERE status IN ('succeeded', 'failed')
+       ORDER BY completed_at DESC, created_at DESC
+       LIMIT -1 OFFSET ?`,
+    )
+    .all(maxCompletedBuilds);
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      db.prepare("DELETE FROM build_logs WHERE build_id = ?").run(row.id);
+      db.prepare("DELETE FROM builds WHERE id = ?").run(row.id);
+    }
+  });
+  tx();
+}
+
+function clipUtf8(text, maxBytes) {
+  if (maxBytes <= 0) return "";
+  let clipped = text;
+  while (Buffer.byteLength(clipped, "utf8") > maxBytes) {
+    clipped = clipped.slice(0, -1);
+  }
+  return clipped;
 }
 
 function run(command, args, onOutput = () => {}) {
@@ -421,7 +550,7 @@ function run(command, args, onOutput = () => {}) {
     child.stdout.on("data", (data) => onOutput(data.toString()));
     child.stderr.on("data", (data) => {
       const text = data.toString();
-      stderr += text;
+      stderr = appendTail(stderr, text, maxStderrTailBytes);
       onOutput(text);
     });
     child.on("error", (err) => {
@@ -434,6 +563,14 @@ function run(command, args, onOutput = () => {}) {
       else reject(new Error(stderr.trim() || `${command} exited ${code}`));
     });
   });
+}
+
+function appendTail(current, next, maxBytes) {
+  let value = current + next;
+  while (Buffer.byteLength(value, "utf8") > maxBytes) {
+    value = value.slice(Math.max(1, Math.floor(value.length / 10)));
+  }
+  return value;
 }
 
 async function acquireLock() {
