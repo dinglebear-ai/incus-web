@@ -943,4 +943,123 @@ describe("provisioner contract validators", () => {
     );
     expect(validated).toMatchObject({ ok: true });
   });
+
+  const validSha256Hex =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+  it("accepts an ImportGoldenConfig command with a valid sha256Hex", () => {
+    const command: ProvisionerCommand<"ImportGoldenConfig"> = {
+      ...baseCommand,
+      type: "ImportGoldenConfig",
+      payload: { sha256Hex: validSha256Hex },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("accepts an uppercase sha256Hex", () => {
+    const command: ProvisionerCommand<"ImportGoldenConfig"> = {
+      ...baseCommand,
+      type: "ImportGoldenConfig",
+      payload: { sha256Hex: validSha256Hex.toUpperCase() },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("rejects an ImportGoldenConfig payload missing sha256Hex", () => {
+    const command = {
+      ...baseCommand,
+      type: "ImportGoldenConfig",
+      payload: {},
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects an ImportGoldenConfig payload with a malformed sha256Hex", () => {
+    const command = {
+      ...baseCommand,
+      type: "ImportGoldenConfig",
+      payload: { sha256Hex: "not-a-hash" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects an ImportGoldenConfig payload with unsupported fields", () => {
+    const command = {
+      ...baseCommand,
+      type: "ImportGoldenConfig",
+      payload: { sha256Hex: validSha256Hex, stagedPath: "/etc/passwd" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("accepts a valid ImportGoldenConfig operation result", () => {
+    const operation: ProvisionerOperation<"ImportGoldenConfig"> = {
+      id: "op-golden-1",
+      requestId: "req-golden-1",
+      type: "ImportGoldenConfig",
+      workspaceId: "workspace-1",
+      status: "succeeded",
+      result: {
+        workspaceId: "workspace-1",
+        extractedAt: new Date().toISOString(),
+        fileCount: 721,
+        warnings: [],
+      },
+    };
+    const validated = validateProvisionerOperation(
+      operation,
+      {
+        id: "workspace-1",
+        ownerUserId: "user-1",
+        incusProject: "user-abc123",
+        incusContainer: "ws-def456",
+      },
+      "ImportGoldenConfig",
+    );
+    expect(validated).toMatchObject({ ok: true });
+  });
+
+  it("rejects an ImportGoldenConfig operation result with a mismatched workspace", () => {
+    const operation: ProvisionerOperation<"ImportGoldenConfig"> = {
+      id: "op-golden-2",
+      requestId: "req-golden-2",
+      type: "ImportGoldenConfig",
+      workspaceId: "workspace-1",
+      status: "succeeded",
+      result: {
+        workspaceId: "some-other-workspace",
+        extractedAt: new Date().toISOString(),
+        fileCount: 1,
+        warnings: [],
+      },
+    };
+    const validated = validateProvisionerOperation(
+      operation,
+      {
+        id: "workspace-1",
+        ownerUserId: "user-1",
+        incusProject: "user-abc123",
+        incusContainer: "ws-def456",
+      },
+      "ImportGoldenConfig",
+    );
+    expect(validated).toMatchObject({
+      ok: false,
+      error: { code: "metadata_mismatch" },
+    });
+  });
 });

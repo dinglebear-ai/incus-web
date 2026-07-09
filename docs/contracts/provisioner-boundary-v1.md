@@ -179,6 +179,7 @@ type ProvisionerErrorCode =
   | "setup_failed"
   | "timeout"
   | "operation_failed"
+  | "golden_config_failed"
 
 type ProvisionerError = {
   code: ProvisionerErrorCode
@@ -400,6 +401,61 @@ Provisioner requirements:
 - Run user-level setup as the workspace Linux user.
 - Bound `lastLogExcerpt`.
 - Remove raw age key material after use.
+
+### ImportGoldenConfig
+
+Seeds a workspace's `~/.claude` and `~/.codex` from a "golden config" zip
+previously exported with `scripts/export-onboarding.mjs` (settings, MCP
+config, skills, agents, plugin registrations, `CLAUDE.md`/`AGENTS.md`,
+memories — never a full recursive dump; see that script for the exact
+include list). This is one of the two `MUTATING_COMMAND_TYPES` entries and
+routes through `getMutableWorkspaceRefForActor`.
+
+```ts
+type ImportGoldenConfigPayload = {
+  sha256Hex: string // 64-char hex sha256 digest of the staged upload
+}
+
+type ImportGoldenConfigResult = {
+  workspaceId: WorkspaceId
+  extractedAt: string
+  fileCount: number
+  warnings: string[] // best-effort, read from the zip's own manifest.json
+}
+
+type ImportGoldenConfigCommand = ProvisionerCommand<ImportGoldenConfigPayload>
+type ImportGoldenConfigOperation = ProvisionerOperation<ImportGoldenConfigResult>
+```
+
+The payload never carries a file path. The upload flow is:
+
+1. `POST /api/workspaces/:workspaceId/golden-config` (in `apps/web`) accepts
+   the raw zip body, validates its content-type and zip magic bytes, and
+   streams it to disk at `${INCUS_WEB_GOLDEN_CONFIG_DIR}/<workspaceId>.zip`
+   (a directory shared between the web app and provisioner system users via
+   `INCUS_WEB_PROVISIONER_GROUP`, mode `2770` — see
+   `ensure_golden_config_staging_dir` in `scripts/incus-web-lib.sh`).
+2. The route computes the upload's sha256 and sends `ImportGoldenConfig`
+   with only that hash.
+3. `scripts/provisioner-server.mjs` derives the staged path itself from the
+   already-authenticated workspace tuple, re-reads the file, verifies the
+   hash matches, `incus file push`es it into the container, and runs a
+   single `incus exec` script that unzips it, merges `claude/` and `codex/`
+   into `/home/<workspace user>/.claude` and `.codex` (`cp -a` over the
+   top, not a wipe-and-replace, so container-local state the export never
+   captured is preserved), `chown`s the result to the workspace user, and
+   cleans up its own temp files.
+
+Provisioner requirements:
+
+- Validate `sha256Hex` independently of the web app (64-char hex).
+- Re-verify the staged file's hash before pushing it into the container —
+  never trust that the file on disk still matches what the caller declared.
+- Reject uploads over `INCUS_WEB_GOLDEN_CONFIG_MAX_BYTES`.
+- Fail with `golden_config_failed` (not a generic incus error) when `unzip`
+  is missing from the container image.
+- Cap `warnings` length and per-entry length like every other bounded
+  result array in this contract.
 
 ## Validation Rules
 

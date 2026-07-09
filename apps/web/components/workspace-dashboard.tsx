@@ -33,6 +33,7 @@ import {
 import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { AgentRunDispatch } from "@/components/agent-run-dispatch";
+import { GoldenConfigImport } from "@/components/golden-config-import";
 import { WorkspaceActions } from "@/components/workspace-actions";
 import {
   isLiveState,
@@ -383,6 +384,7 @@ function WorkspaceCard({
         />
 
         <WorkspaceFeatures workspace={workspace} />
+        <GoldenConfigImport workspace={workspace} />
         <AgentRunDispatch workspace={workspace} />
         <SetupCompleteNotice workspace={workspace} />
         <SetupProgressPanel workspace={workspace} />

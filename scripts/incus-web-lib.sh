@@ -608,6 +608,20 @@ ensure_host_provisioner_identity() {
   fi
 }
 
+# The Next.js web app (INCUS_WEB_APP_USER) writes uploaded golden-config
+# zips here; the provisioner (INCUS_WEB_PROVISIONER_USER) reads them back
+# when handling ImportGoldenConfig. Both are already members of
+# INCUS_WEB_PROVISIONER_GROUP (see ensure_host_provisioner_identity /
+# ensure_host_web_app_identity), so owning the directory by that group with
+# the setgid bit (mode 2770) is enough for both to read/write without
+# either needing the other's primary group.
+ensure_golden_config_staging_dir() {
+  sudo_cmd install -d -m 2770 \
+    -o "$INCUS_WEB_PROVISIONER_USER" \
+    -g "$INCUS_WEB_PROVISIONER_GROUP" \
+    "$INCUS_WEB_GOLDEN_CONFIG_DIR"
+}
+
 ensure_host_provisioner_token() {
   local token_file="$INCUS_WEB_PROVISIONER_TOKEN_FILE"
   local token_dir
@@ -819,6 +833,8 @@ write_host_provisioner_env() {
   validate_systemd_env_value CONTAINER_NAME "$name"
   validate_systemd_env_value INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS"
   validate_systemd_env_value INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS"
+  validate_systemd_env_value INCUS_WEB_GOLDEN_CONFIG_DIR "$INCUS_WEB_GOLDEN_CONFIG_DIR"
+  validate_systemd_env_value INCUS_WEB_WORKSPACE_USER "$WEB_USER"
   if [[ "${ENABLE_CODEX_APP_SERVER:-0}" == "1" ]]; then
     validate_env_file_value INCUS_WEB_CODEX_APP_SERVER_URL "$INCUS_WEB_CODEX_APP_SERVER_URL"
     validate_systemd_env_value INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS "$INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS"
@@ -839,6 +855,8 @@ write_host_provisioner_env() {
     printf 'CONTAINER_NAME=%s\n' "$name"
     printf 'INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS"
     printf 'INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS"
+    printf 'INCUS_WEB_GOLDEN_CONFIG_DIR=%s\n' "$INCUS_WEB_GOLDEN_CONFIG_DIR"
+    printf 'INCUS_WEB_WORKSPACE_USER=%s\n' "$WEB_USER"
     if [[ "${ENABLE_CODEX_APP_SERVER:-0}" == "1" ]]; then
       printf 'INCUS_WEB_CODEX_APP_SERVER_URL=%s\n' "$INCUS_WEB_CODEX_APP_SERVER_URL"
       printf 'INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS=%s\n' "$INCUS_WEB_CODEX_APP_SERVER_TIMEOUT_MS"
@@ -869,6 +887,7 @@ configure_host_provisioner() {
 
   ensure_host_node
   ensure_host_provisioner_identity
+  ensure_golden_config_staging_dir
   install_host_provisioner_server
   ensure_host_provisioner_token
   configure_codex_app_server
@@ -998,6 +1017,7 @@ write_host_web_app_env() {
   validate_port_value INCUS_WEB_APP_PORT "$INCUS_WEB_APP_PORT"
   validate_systemd_env_value INCUS_WEB_WORKSPACE_OWNER_MODE "$INCUS_WEB_WORKSPACE_OWNER_MODE"
   validate_systemd_env_value INCUS_WEB_ALLOW_SHARED_PROTOTYPE "$INCUS_WEB_ALLOW_SHARED_PROTOTYPE"
+  validate_systemd_env_value INCUS_WEB_GOLDEN_CONFIG_DIR "$INCUS_WEB_GOLDEN_CONFIG_DIR"
   if [[ -n "$INCUS_WEB_TERMINAL_URL" ]]; then
     validate_env_file_value INCUS_WEB_TERMINAL_URL "$INCUS_WEB_TERMINAL_URL"
   fi
@@ -1015,6 +1035,7 @@ write_host_web_app_env() {
     printf 'INCUS_WEB_APP_PORT=%s\n' "$INCUS_WEB_APP_PORT"
     printf 'INCUS_WEB_WORKSPACE_OWNER_MODE=%s\n' "$INCUS_WEB_WORKSPACE_OWNER_MODE"
     printf 'INCUS_WEB_ALLOW_SHARED_PROTOTYPE=%s\n' "$INCUS_WEB_ALLOW_SHARED_PROTOTYPE"
+    printf 'INCUS_WEB_GOLDEN_CONFIG_DIR=%s\n' "$INCUS_WEB_GOLDEN_CONFIG_DIR"
     if [[ -n "$INCUS_WEB_TERMINAL_URL" ]]; then
       printf 'INCUS_WEB_TERMINAL_URL=%s\n' "$INCUS_WEB_TERMINAL_URL"
     fi

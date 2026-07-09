@@ -405,6 +405,55 @@ type ListAgentRunsResult = {
 
 **Side effects**: None (read-only)
 
+### ImportGoldenConfig
+
+Seeds a workspace's `~/.claude` and `~/.codex` from a "golden config" zip
+exported with `scripts/export-onboarding.mjs` (settings, MCP config,
+skills, agents, plugin registrations, `CLAUDE.md`/`AGENTS.md`, memories).
+Mutating — requires the same `getMutableWorkspaceRefForActor` authorization
+as `SetWorkspaceLimits`.
+
+```typescript
+type ImportGoldenConfigCommand = {
+  command: "ImportGoldenConfig"
+  requestId: RequestId
+  workspaceId: WorkspaceId
+  incusProject: IncusProjectName
+  incusContainer: IncusContainerName
+  ownerUserId: UserId
+  sha256Hex: string  // 64-char hex sha256 of the staged upload
+}
+
+type ImportGoldenConfigResult = {
+  workspaceId: WorkspaceId
+  extractedAt: string
+  fileCount: number
+  warnings: string[]  // best-effort, read from the zip's own manifest.json
+}
+```
+
+The web app (`POST /api/workspaces/:workspaceId/golden-config`) stages the
+uploaded zip at `${INCUS_WEB_GOLDEN_CONFIG_DIR}/<workspaceId>.zip` — a
+directory shared between the web app and provisioner system users via
+`INCUS_WEB_PROVISIONER_GROUP` — before sending this command. The command
+payload never carries a path, only a content hash; the provisioner derives
+the staged path itself from the already-authenticated workspace tuple.
+
+**Validation**:
+- `sha256Hex` is a 64-character hex digest
+- Staged file exists at the derived path and is under
+  `INCUS_WEB_GOLDEN_CONFIG_MAX_BYTES`
+- Staged file's actual sha256 matches `sha256Hex` (re-verified server-side,
+  not trusted from the request)
+
+**Side effects**: Pushes the zip into the container, unzips it, merges
+`claude/` and `codex/` into the workspace user's home directories (`cp -a`
+over existing files, not a wipe-and-replace), `chown`s the result, and
+removes its own temp files inside the container. The host-side staged zip
+at `${INCUS_WEB_GOLDEN_CONFIG_DIR}/<workspaceId>.zip` is left in place
+(each new upload overwrites it, so there's no unbounded growth) to allow
+re-running the import without re-uploading.
+
 ## Error Codes
 
 ```typescript
@@ -422,6 +471,7 @@ type ProvisionerErrorCode =
   | "not_implemented"       // Command not yet implemented
   | "timeout"               // Operation timed out
   | "operation_failed"       // Generic failure
+  | "golden_config_failed"   // ImportGoldenConfig-specific failure (e.g. unzip missing)
 ```
 
 ### Error Response Format
