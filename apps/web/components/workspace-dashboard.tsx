@@ -115,6 +115,12 @@ function setupPhaseTone(phase: SetupPhase) {
   return "warn";
 }
 
+function setupStatusTone(phase: SetupPhase) {
+  if (phase === "ready") return "online";
+  if (phase === "failed") return "error";
+  return "syncing";
+}
+
 function setupPhaseLabel(phase: SetupPhase) {
   if (phase === "ready") return "complete";
   return phase.replaceAll("_", " ");
@@ -409,12 +415,7 @@ function ReadinessRunway({ workspace }: { workspace: Workspace }) {
     {
       label: "Setup",
       value: setupPhaseLabel(workspace.setup.phase),
-      tone:
-        workspace.setup.phase === "ready"
-          ? "online"
-          : workspace.setup.phase === "failed"
-            ? "error"
-            : "syncing",
+      tone: setupStatusTone(workspace.setup.phase),
     },
     {
       label: "Dotfiles",

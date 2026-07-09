@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HammerIcon, PackagePlusIcon, RefreshCwIcon, SaveIcon, UploadIcon } from "lucide-react";
 
 import { Banner } from "@/components/ui/aurora/banner";
@@ -72,16 +72,18 @@ export function BuilderPanel() {
     () => BUILDER_DISTROS.find((entry) => entry.id === distro)?.releases ?? [],
     [distro],
   );
+  const cancelBuildPolling = useCallback(() => {
+    if (pollTimerRef.current !== undefined) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = undefined;
+    }
+    abortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     void refreshRegistry();
-    return () => {
-      if (pollTimerRef.current !== undefined) {
-        window.clearTimeout(pollTimerRef.current);
-      }
-      abortRef.current?.abort();
-    };
-  }, []);
+    return cancelBuildPolling;
+  }, [cancelBuildPolling]);
 
   function addPackage(name = packageInput) {
     const normalized = name.trim();
@@ -93,11 +95,7 @@ export function BuilderPanel() {
   async function dispatchBuild() {
     setMessage(undefined);
     setLog("");
-    if (pollTimerRef.current !== undefined) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = undefined;
-    }
-    abortRef.current?.abort();
+    cancelBuildPolling();
     try {
       const response = await fetch("/api/builds", {
         method: "POST",
@@ -237,7 +235,7 @@ export function BuilderPanel() {
           <HammerIcon className="size-4 text-[var(--aurora-accent-primary)]" />
           <h2 className="aurora-text-section">Builder</h2>
         </div>
-        {build ? <Badge tone={build.status === "failed" ? "error" : build.status === "succeeded" ? "success" : "info"}>{build.status}</Badge> : null}
+        {build ? <Badge tone={buildStatusTone(build.status)}>{build.status}</Badge> : null}
       </div>
 
       <div className="grid gap-3 md:grid-cols-4">
@@ -363,6 +361,12 @@ export function BuilderPanel() {
 
 function postInstallCommands(value: string) {
   return value.split("\n").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function buildStatusTone(status: string) {
+  if (status === "failed") return "error";
+  if (status === "succeeded") return "success";
+  return "info";
 }
 
 function appendBoundedLog(current: string, chunk: string) {
