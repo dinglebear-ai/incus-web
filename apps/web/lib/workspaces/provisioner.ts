@@ -205,8 +205,7 @@ export function getWorkspaceRefForActor(
 }
 
 // Built once from the compile-time-checked MUTATING_COMMAND_TYPES array in
-// contracts.ts (empty today -- no mutating command exists yet). Kept
-// module-private and never exported by reference: sendWorkspaceCommand below
+// contracts.ts. Kept module-private and never exported by reference: sendWorkspaceCommand below
 // is the only thing that needs membership, and isMutatingCommandType gives
 // tests/observability a read-only capability instead of a mutable Set. This
 // does not restrict existing lifecycle commands (Start/Stop/RestartWorkspace);

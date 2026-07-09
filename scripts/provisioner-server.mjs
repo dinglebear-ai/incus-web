@@ -491,6 +491,101 @@ async function restartWorkspace(command, options) {
   };
 }
 
+// Mirrors apps/web/lib/provisioner/contracts.ts's validateSetWorkspaceLimitsPayload
+// exactly. The web app already validates before sending a command, but this
+// process is a separate trust boundary reachable by anything holding the
+// bearer token (INCUS_WEB_PROVISIONER_TOKEN) -- it must not assume the
+// caller already validated, the same way validateWorkspace() below never
+// assumes the caller sent a real workspace tuple.
+// Incus limits.cpu is an integer CPU count (fractional allowances live under
+// the separate limits.cpu.allowance key), so fractional values here are
+// rejected instead of silently failing at the `incus config set` boundary.
+const CPU_LIMIT_PATTERN = /^\d+$/;
+const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
+
+function isPositiveLimitValue(value) {
+  const numeric = Number.parseFloat(value);
+  return Number.isFinite(numeric) && numeric > 0;
+}
+
+function validateLimitsPayload(payload) {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "SetWorkspaceLimits payload must be an object";
+  }
+  const allowedKeys = new Set(["cpu", "memory"]);
+  for (const key of Object.keys(payload)) {
+    if (!allowedKeys.has(key)) {
+      return "SetWorkspaceLimits payload contains unsupported fields";
+    }
+  }
+  const cpu = payload.cpu;
+  const memory = payload.memory;
+  if (
+    cpu !== undefined &&
+    (typeof cpu !== "string" ||
+      cpu.length === 0 ||
+      !CPU_LIMIT_PATTERN.test(cpu) ||
+      !isPositiveLimitValue(cpu))
+  ) {
+    return "cpu must be a positive number string";
+  }
+  if (
+    memory !== undefined &&
+    (typeof memory !== "string" ||
+      memory.length === 0 ||
+      !MEMORY_LIMIT_PATTERN.test(memory) ||
+      !isPositiveLimitValue(memory))
+  ) {
+    return "memory must be a positive byte-size string with a unit, like 4GiB or 512MB";
+  }
+  return undefined;
+}
+
+// `incus config unset` exits non-zero when the key is already unset, so a
+// bare optionalText()-wrapped unset would swallow every failure -- daemon
+// down, permission denied, timeout -- as if it were that one idempotent
+// case. Reading the current value first (config get is safe to no-op via
+// optionalText, same as getWorkspaceStatus's reads) and only unsetting when
+// something is actually set keeps the idempotency check separate from error
+// handling: a real unset failure still throws and surfaces as a failed
+// operation instead of a silent no-op success.
+async function clearLimitIfSet(container, key, options) {
+  const current = await optionalText(["config", "get", container, key], options);
+  if (current !== "") {
+    await incusText(["config", "unset", container, key], options);
+  }
+}
+
+async function setWorkspaceLimits(command, options) {
+  const invalidReason = validateLimitsPayload(command.payload);
+  if (invalidReason) {
+    throw Object.assign(new Error(invalidReason), { code: "invalid_input" });
+  }
+
+  const cpu = command.payload?.cpu;
+  const memory = command.payload?.memory;
+
+  if (cpu !== undefined) {
+    await incusText(["config", "set", incusContainer, `limits.cpu=${cpu}`], options);
+  } else {
+    await clearLimitIfSet(incusContainer, "limits.cpu", options);
+  }
+
+  if (memory !== undefined) {
+    await incusText(["config", "set", incusContainer, `limits.memory=${memory}`], options);
+  } else {
+    await clearLimitIfSet(incusContainer, "limits.memory", options);
+  }
+
+  statusCache = undefined;
+  const status = await getWorkspaceStatus(command, options);
+  return {
+    workspaceId: command.workspace.id,
+    state: status.state === "running" ? "running" : "stopped",
+    status,
+  };
+}
+
 function mapIncusState(status, statusCode) {
   if (typeof status === "string") {
     switch (status.toLowerCase()) {
@@ -607,6 +702,12 @@ async function handleCommand(command, options) {
           "succeeded",
           await restartWorkspace(command, options),
         );
+      case "SetWorkspaceLimits":
+        return operation(
+          command,
+          "succeeded",
+          await setWorkspaceLimits(command, options),
+        );
       case "DispatchAgentRun":
         return operation(
           command,
@@ -645,6 +746,13 @@ async function handleCommand(command, options) {
         );
     }
   } catch (err) {
+    if (err && err.code === "invalid_input") {
+      return operation(
+        command,
+        "failed",
+        error("invalid_input", err.message, false),
+      );
+    }
     const message = err instanceof Error ? err.message : String(err);
     return operation(
       command,

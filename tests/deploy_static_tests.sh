@@ -382,6 +382,7 @@ for needle in \
   "StartWorkspace" \
   "StopWorkspace" \
   "RestartWorkspace" \
+  "SetWorkspaceLimits" \
   "failed to complete workspace operation through Incus"; do
   if ! grep -Fq -- "$needle" "$root/scripts/provisioner-server.mjs"; then
     printf 'missing expected host provisioner server content: %s\n' "$needle" >&2

@@ -9,6 +9,7 @@ export const PROVISIONER_COMMAND_TYPES = [
   "RunSetup",
   "DispatchAgentRun",
   "ListAgentRuns",
+  "SetWorkspaceLimits",
 ] as const;
 
 // Command types that mutate workspace configuration (resource limits,
@@ -16,12 +17,12 @@ export const PROVISIONER_COMMAND_TYPES = [
 // route through the stricter apps/web/lib/workspaces/provisioner.ts
 // getMutableWorkspaceRefForActor authorization check instead of the plain
 // owner check, requiring INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION=1 in
-// shared-prototype mode. Empty today -- no such command exists yet in
-// PROVISIONER_COMMAND_TYPES above (e.g. a future "SetWorkspaceLimits").
-// `satisfies` ties every entry to a real command type at compile time, so
-// a typo or a since-removed command type here is a build error, not a
-// silent runtime gap.
-export const MUTATING_COMMAND_TYPES = [] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
+// shared-prototype mode. `satisfies` ties every entry to a real command
+// type at compile time, so a typo or a since-removed command type here is
+// a build error, not a silent runtime gap.
+export const MUTATING_COMMAND_TYPES = [
+  "SetWorkspaceLimits",
+] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
 
 const PROVISIONER_WORKSPACE_STATES = [
   "creating",
@@ -168,6 +169,11 @@ export type RestartWorkspacePayload = {
   timeoutSeconds: number;
 };
 
+export type SetWorkspaceLimitsPayload = {
+  cpu?: string;
+  memory?: string;
+};
+
 export type RunSetupPayload = {
   dotfilesRepo?: string;
   ageKey?: {
@@ -257,6 +263,8 @@ export type LifecycleWorkspaceResult = {
   status?: WorkspaceRuntimeStatus;
 };
 
+export type SetWorkspaceLimitsResult = LifecycleWorkspaceResult;
+
 export type RunSetupResult = {
   workspaceId: WorkspaceId;
   setup: ProvisionerSetupSummary;
@@ -282,6 +290,7 @@ export type ProvisionerCommandPayloadMap = {
   RunSetup: RunSetupPayload;
   DispatchAgentRun: DispatchAgentRunPayload;
   ListAgentRuns: ListAgentRunsPayload;
+  SetWorkspaceLimits: SetWorkspaceLimitsPayload;
 };
 
 export type ProvisionerCommandResultMap = {
@@ -293,6 +302,7 @@ export type ProvisionerCommandResultMap = {
   RunSetup: RunSetupResult;
   DispatchAgentRun: DispatchAgentRunResult;
   ListAgentRuns: ListAgentRunsResult;
+  SetWorkspaceLimits: SetWorkspaceLimitsResult;
 };
 
 export type ProvisionerCommand<
@@ -759,6 +769,8 @@ function validateCommandPayload(
       return validateDispatchAgentRunPayload(payload);
     case "ListAgentRuns":
       return validateListAgentRunsPayload(payload);
+    case "SetWorkspaceLimits":
+      return validateSetWorkspaceLimitsPayload(payload);
   }
 }
 
@@ -815,6 +827,53 @@ function validateRestartWorkspacePayload(
   return { ok: true, value: payload as RestartWorkspacePayload };
 }
 
+// Requires a positive value: a "0" CPU count or a bare (unit-less) memory
+// number are syntactically parseable but not sensible workspace limits, and
+// silently accepting them just relocates the mistake to incus's own error
+// path. "b" is mandatory in MEMORY_LIMIT_PATTERN so a caller must state a
+// unit explicitly (e.g. "512b" for byte-precision, not a bare "512").
+// CPU_LIMIT_PATTERN requires an integer: incus's limits.cpu is a CPU count,
+// not a fractional allowance (that's the separate limits.cpu.allowance key),
+// so "1.5" would pass this pattern but fail at the `incus config set`
+// boundary if it were allowed here.
+const CPU_LIMIT_PATTERN = /^\d+$/;
+const MEMORY_LIMIT_PATTERN = /^\d+(\.\d+)?[kmgt]?i?b$/i;
+
+function isPositiveLimitValue(value: string): boolean {
+  const numeric = Number.parseFloat(value);
+  return Number.isFinite(numeric) && numeric > 0;
+}
+
+function validateSetWorkspaceLimitsPayload(
+  payload: unknown,
+): ValidationResult<SetWorkspaceLimitsPayload> {
+  if (!isRecord(payload)) {
+    return invalid("SetWorkspaceLimits payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["cpu", "memory"])) {
+    return invalid("SetWorkspaceLimits payload contains unsupported fields");
+  }
+  if (
+    payload.cpu !== undefined &&
+    (typeof payload.cpu !== "string" ||
+      payload.cpu.length === 0 ||
+      !CPU_LIMIT_PATTERN.test(payload.cpu) ||
+      !isPositiveLimitValue(payload.cpu))
+  ) {
+    return invalid("cpu must be a positive number string");
+  }
+  if (
+    payload.memory !== undefined &&
+    (typeof payload.memory !== "string" ||
+      payload.memory.length === 0 ||
+      !MEMORY_LIMIT_PATTERN.test(payload.memory) ||
+      !isPositiveLimitValue(payload.memory))
+  ) {
+    return invalid("memory must be a positive byte-size string with a unit, like 4GiB or 512MB");
+  }
+  return { ok: true, value: payload as SetWorkspaceLimitsPayload };
+}
+
 function validateEmptyPayload(
   payload: unknown,
 ): ValidationResult<StartWorkspacePayload | GetWorkspaceStatusPayload> {
@@ -848,6 +907,8 @@ function validateOperationResult(
       return validateDispatchAgentRunResult(result, workspace);
     case "ListAgentRuns":
       return validateListAgentRunsResult(result, workspace);
+    case "SetWorkspaceLimits":
+      return validateLifecycleWorkspaceResult(result, workspace, undefined, false);
   }
 }
 
@@ -908,7 +969,7 @@ function validateCreateWorkspaceResult(
 function validateLifecycleWorkspaceResult(
   result: unknown,
   workspace: ProvisionerWorkspaceRef,
-  state: "running" | "stopped",
+  requiredState: "running" | "stopped" | undefined,
   requireStatus: boolean,
 ): ValidationResult<LifecycleWorkspaceResult> {
   if (!isRecord(result)) {
@@ -917,7 +978,13 @@ function validateLifecycleWorkspaceResult(
   if (result.workspaceId !== workspace.id) {
     return metadataMismatch("lifecycle result workspace did not match request");
   }
-  if (result.state !== state) {
+  // A caller that omits requiredState (e.g. SetWorkspaceLimits, which
+  // doesn't force a particular lifecycle transition unlike Start/Stop/
+  // Restart) accepts either "running" or "stopped".
+  if (requiredState !== undefined && result.state !== requiredState) {
+    return invalid("lifecycle result state is invalid");
+  }
+  if (requiredState === undefined && result.state !== "running" && result.state !== "stopped") {
     return invalid("lifecycle result state is invalid");
   }
   if (requireStatus && result.status === undefined) {

@@ -800,4 +800,147 @@ describe("provisioner contract validators", () => {
     );
     expect(validated).toMatchObject({ ok: true, value: { error } });
   });
+
+  it("accepts a SetWorkspaceLimits command with both cpu and memory set", () => {
+    const command: ProvisionerCommand<"SetWorkspaceLimits"> = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { cpu: "2", memory: "4GiB" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("accepts a SetWorkspaceLimits command with no fields (clears both)", () => {
+    const command: ProvisionerCommand<"SetWorkspaceLimits"> = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: {},
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("accepts a SetWorkspaceLimits command clearing only cpu", () => {
+    const command: ProvisionerCommand<"SetWorkspaceLimits"> = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { memory: "4GiB" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with unsupported fields", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { cpu: "2", disk: "40GiB" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with a malformed cpu value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { cpu: "not-a-number" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with a negative cpu value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { cpu: "-1" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with a malformed memory value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { memory: "lots" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with a zero cpu value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { cpu: "0" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("rejects a SetWorkspaceLimits payload with a bare (unit-less) memory value", () => {
+    const command = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { memory: "4" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    });
+  });
+
+  it("accepts a SetWorkspaceLimits payload with a byte-unit memory value", () => {
+    const command: ProvisionerCommand<"SetWorkspaceLimits"> = {
+      ...baseCommand,
+      type: "SetWorkspaceLimits",
+      payload: { memory: "512b" },
+    };
+    const result = validateProvisionerCommand(command);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("accepts a valid SetWorkspaceLimits operation result", () => {
+    const operation: ProvisionerOperation<"SetWorkspaceLimits"> = {
+      id: "op-limits-1",
+      requestId: "req-limits-1",
+      type: "SetWorkspaceLimits",
+      workspaceId: "workspace-1",
+      status: "succeeded",
+      result: {
+        workspaceId: "workspace-1",
+        state: "running",
+      },
+    };
+    const validated = validateProvisionerOperation(
+      operation,
+      {
+        id: "workspace-1",
+        ownerUserId: "user-1",
+        incusProject: "user-abc123",
+        incusContainer: "ws-def456",
+      },
+      "SetWorkspaceLimits",
+    );
+    expect(validated).toMatchObject({ ok: true });
+  });
 });
