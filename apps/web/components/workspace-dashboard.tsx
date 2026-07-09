@@ -206,17 +206,15 @@ function WorkspaceFeature({
   label: string;
   value: string;
   detail: string;
-  tone?: "cyan" | "rose" | "success" | "warn";
+  tone?: "cyan" | "success" | "warn";
   href?: string;
 }) {
   const color =
-    tone === "rose"
-      ? "var(--aurora-accent-pink)"
-      : tone === "success"
-        ? "var(--aurora-success)"
-        : tone === "warn"
-          ? "var(--aurora-warn)"
-          : "var(--aurora-accent-primary)";
+    tone === "success"
+      ? "var(--aurora-success)"
+      : tone === "warn"
+        ? "var(--aurora-warn)"
+        : "var(--aurora-accent-primary)";
   const className =
     "grid min-h-[82px] grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 text-left";
   const content = (
