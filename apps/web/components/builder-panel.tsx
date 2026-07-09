@@ -76,44 +76,50 @@ export function BuilderPanel() {
   async function dispatchBuild() {
     setMessage(undefined);
     setLog("");
-    const response = await fetch("/api/builds", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "dispatch",
-        distro,
-        release,
-        packages,
-        postInstallCommands: postInstallCommands(postInstall),
-        imageAlias,
-        idempotencyKey: crypto.randomUUID(),
-      }),
-    });
-    const body = await response.json();
-    if (!response.ok || body?.ok !== true) {
-      setMessage(apiErrorMessage(body, "build dispatch failed"));
-      return;
+    try {
+      const response = await fetch("/api/builds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "dispatch",
+          distro,
+          release,
+          packages,
+          postInstallCommands: postInstallCommands(postInstall),
+          imageAlias,
+          idempotencyKey: crypto.randomUUID(),
+        }),
+      });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "build dispatch failed"));
+      }
+      const buildId = body.operation.result.buildId as string;
+      void pollBuild(buildId, 0);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "build dispatch failed");
     }
-    const buildId = body.operation.result.buildId as string;
-    void pollBuild(buildId, 0);
   }
 
   async function pollBuild(buildId: string, offset: number) {
-    const response = await fetch(`/api/builds/${buildId}?offset=${offset}`, {
-      headers: { "Cache-Control": "no-store" },
-    });
-    const body = await response.json();
-    if (body?.ok !== true) {
-      setMessage(body?.operation?.error?.message ?? "build status failed");
-      return;
-    }
-    const result = body.operation.result as BuildStatus;
-    setBuild(result);
-    setLog((current) => current + (result.logChunk || ""));
-    if (result.status === "queued" || result.status === "running") {
-      window.setTimeout(() => void pollBuild(buildId, result.logOffset), 2500);
-    } else {
-      void refreshRegistry();
+    try {
+      const response = await fetch(`/api/builds/${buildId}?offset=${offset}`, {
+        headers: { "Cache-Control": "no-store" },
+      });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "build status failed"));
+      }
+      const result = body.operation.result as BuildStatus;
+      setBuild(result);
+      setLog((current) => current + (result.logChunk || ""));
+      if (result.status === "queued" || result.status === "running") {
+        window.setTimeout(() => void pollBuild(buildId, result.logOffset), 2500);
+      } else {
+        void refreshRegistry();
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "build status failed");
     }
   }
 
@@ -140,16 +146,30 @@ export function BuilderPanel() {
   }
 
   async function refreshRegistry() {
-    const response = await fetch("/api/builds", { headers: { "Cache-Control": "no-store" } });
-    const body = await response.json().catch(() => undefined);
-    if (body?.images?.result?.images) setImages(body.images.result.images);
-    if (body?.presets?.result?.presets) setPresets(body.presets.result.presets);
+    try {
+      const response = await fetch("/api/builds", { headers: { "Cache-Control": "no-store" } });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "failed to load build registry"));
+      }
+      setImages(Array.isArray(body.images?.result?.images) ? body.images.result.images : []);
+      setPresets(Array.isArray(body.presets?.result?.presets) ? body.presets.result.presets : []);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "failed to load build registry");
+    }
   }
 
   async function searchPackage() {
-    const response = await fetch(`/api/builder/package-search?q=${encodeURIComponent(packageInput)}`);
-    const body = await response.json().catch(() => undefined);
-    setSearchResults(Array.isArray(body?.results) ? body.results : []);
+    try {
+      const response = await fetch(`/api/builder/package-search?q=${encodeURIComponent(packageInput)}`);
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "package search failed"));
+      }
+      setSearchResults(Array.isArray(body?.results) ? body.results : []);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "package search failed");
+    }
   }
 
   async function importFile(kind: "devcontainer" | "tool-versions" | "mise", file: File) {

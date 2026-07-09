@@ -110,6 +110,7 @@ const DISPATCH_KEYS = [
   "basedOn",
 ] as const;
 const SAVE_PRESET_KEYS = ["name", "distro", "release", "packages", "postInstallCommands"] as const;
+const IMAGE_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,118}$/;
 
 export type BuildWorkerPayloadMap = {
   DispatchBuildImage: DispatchBuildImagePayload;
@@ -201,6 +202,32 @@ export function validateBuildWorkerCommand(
   }
 }
 
+export function validateBuildWorkerOperation<TType extends BuildWorkerCommandType>(
+  operation: unknown,
+  command: BuildWorkerCommand<TType>,
+): { ok: true; value: BuildWorkerOperation<TType> } | { ok: false; message: string } {
+  if (!isRecord(operation)) return { ok: false, message: "operation must be an object" };
+  if (
+    typeof operation.id !== "string" ||
+    operation.requestId !== command.requestId ||
+    operation.type !== command.type ||
+    typeof operation.completedAt !== "string" ||
+    !isIsoTimestamp(operation.completedAt) ||
+    (operation.status !== "succeeded" && operation.status !== "failed")
+  ) {
+    return { ok: false, message: "operation envelope is invalid" };
+  }
+  if (operation.status === "failed") {
+    return isOperationError(operation.error)
+      ? { ok: true, value: operation as BuildWorkerOperation<TType> }
+      : { ok: false, message: "operation error is invalid" };
+  }
+  if (!validateResult(operation.result, command.type)) {
+    return { ok: false, message: "operation result is invalid" };
+  }
+  return { ok: true, value: operation as BuildWorkerOperation<TType> };
+}
+
 function validateDispatch(command: Record<string, unknown>) {
   const payload = command.payload as Record<string, unknown>;
   if (!hasOnlyKeys(payload, DISPATCH_KEYS)) {
@@ -210,11 +237,11 @@ function validateDispatch(command: Record<string, unknown>) {
     !stringValue(payload.distro, 40) ||
     !stringValue(payload.release, 80) ||
     !stringValue(payload.definitionYaml, 200_000) ||
-    !stringValue(payload.imageAlias, 120) ||
+    !isBuildImageAlias(payload.imageAlias) ||
     !stringValue(payload.idempotencyKey, 160) ||
     !arrayOfStrings(payload.packages, 200, 100) ||
     !arrayOfStrings(payload.postInstallCommands, 50, 20_000) ||
-    (payload.basedOn !== undefined && !stringValue(payload.basedOn, 120))
+    (payload.basedOn !== undefined && !isBuildImageAlias(payload.basedOn))
   ) {
     return { ok: false as const, message: "DispatchBuildImage payload is invalid" };
   }
@@ -239,10 +266,104 @@ function validateGetStatus(command: Record<string, unknown>) {
 
 function validateSetMaster(command: Record<string, unknown>) {
   const payload = command.payload as Record<string, unknown>;
-  if (!hasOnlyKeys(payload, ["imageAlias"]) || !stringValue(payload.imageAlias, 120)) {
+  if (!hasOnlyKeys(payload, ["imageAlias"]) || !isBuildImageAlias(payload.imageAlias)) {
     return { ok: false as const, message: "SetBuildImageMaster payload is invalid" };
   }
   return { ok: true as const, value: command as unknown as BuildWorkerCommand };
+}
+
+export function isBuildImageAlias(value: unknown): value is string {
+  return typeof value === "string" && IMAGE_ALIAS_PATTERN.test(value);
+}
+
+function validateResult(result: unknown, type: BuildWorkerCommandType) {
+  if (!isRecord(result)) return false;
+  switch (type) {
+    case "DispatchBuildImage":
+      return hasOnlyKeys(result, ["buildId"]) && stringValue(result.buildId, 80);
+    case "GetBuildStatus":
+      return (
+        hasOnlyKeys(result, [
+          "buildId",
+          "status",
+          "imageAlias",
+          "logOffset",
+          "logChunk",
+          "error",
+          "startedAt",
+          "completedAt",
+        ]) &&
+        stringValue(result.buildId, 80) &&
+        isBuildStatus(result.status) &&
+        isBuildImageAlias(result.imageAlias) &&
+        typeof result.logOffset === "number" &&
+        Number.isInteger(result.logOffset) &&
+        result.logOffset >= 0 &&
+        typeof result.logChunk === "string" &&
+        (result.error === undefined || typeof result.error === "string") &&
+        (result.startedAt === undefined || isIsoTimestamp(result.startedAt)) &&
+        (result.completedAt === undefined || isIsoTimestamp(result.completedAt))
+      );
+    case "ListBuildImages":
+      return hasOnlyKeys(result, ["images"]) && Array.isArray(result.images) && result.images.every(isBuiltImageRecord);
+    case "SetBuildImageMaster":
+      return hasOnlyKeys(result, ["imageAlias"]) && isBuildImageAlias(result.imageAlias);
+    case "ListBuildPresets":
+      return hasOnlyKeys(result, ["presets"]) && Array.isArray(result.presets) && result.presets.every(isBuilderPreset);
+    case "SaveBuildPreset":
+      return hasOnlyKeys(result, ["preset"]) && isBuilderPreset(result.preset);
+  }
+}
+
+function isBuildStatus(value: unknown): value is BuildStatus {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed";
+}
+
+function isBuiltImageRecord(value: unknown): value is BuiltImageRecord {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["imageAlias", "ownerUserId", "buildId", "distro", "release", "basedOn", "isMaster", "createdAt"]) &&
+    isBuildImageAlias(value.imageAlias) &&
+    stringValue(value.ownerUserId, 200) &&
+    stringValue(value.buildId, 80) &&
+    stringValue(value.distro, 40) &&
+    stringValue(value.release, 80) &&
+    (value.basedOn === undefined || isBuildImageAlias(value.basedOn)) &&
+    typeof value.isMaster === "boolean" &&
+    isIsoTimestamp(value.createdAt)
+  );
+}
+
+function isBuilderPreset(value: unknown): value is BuilderPreset {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["id", "ownerUserId", "name", "distro", "release", "packages", "postInstallCommands", "updatedAt"]) &&
+    stringValue(value.id, 120) &&
+    stringValue(value.ownerUserId, 200) &&
+    stringValue(value.name, 80) &&
+    stringValue(value.distro, 40) &&
+    stringValue(value.release, 80) &&
+    arrayOfStrings(value.packages, 200, 100) &&
+    arrayOfStrings(value.postInstallCommands, 50, 20_000) &&
+    isIsoTimestamp(value.updatedAt)
+  );
+}
+
+function isOperationError(value: unknown) {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["code", "message", "retryable"]) &&
+    (value.code === "invalid_input" ||
+      value.code === "unauthenticated_service" ||
+      value.code === "operation_failed" ||
+      value.code === "not_found") &&
+    typeof value.message === "string" &&
+    typeof value.retryable === "boolean"
+  );
+}
+
+function isIsoTimestamp(value: unknown) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
 function validateSavePreset(command: Record<string, unknown>) {

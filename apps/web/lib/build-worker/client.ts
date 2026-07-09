@@ -4,6 +4,7 @@ import {
   type BuildWorkerCommand,
   type BuildWorkerCommandType,
   type BuildWorkerOperation,
+  validateBuildWorkerOperation,
   validateBuildWorkerCommand,
 } from "@/lib/build-worker/contracts";
 
@@ -20,10 +21,17 @@ const defaultTimeoutMs = 10_000;
 export function buildWorkerConfigFromEnv(): BuildWorkerTransportConfig | undefined {
   const token = process.env.INCUS_WEB_BUILD_WORKER_TOKEN?.trim();
   if (!token) return undefined;
+  const url = process.env.INCUS_WEB_BUILD_WORKER_URL?.trim();
+  if (url) {
+    return {
+      token,
+      url,
+      timeoutMs: numberEnv("INCUS_WEB_BUILD_WORKER_TIMEOUT_MS", defaultTimeoutMs),
+    };
+  }
   return {
     token,
     socketPath: process.env.INCUS_WEB_BUILD_WORKER_SOCKET?.trim() || defaultSocketPath,
-    url: process.env.INCUS_WEB_BUILD_WORKER_URL?.trim() || undefined,
     timeoutMs: numberEnv("INCUS_WEB_BUILD_WORKER_TIMEOUT_MS", defaultTimeoutMs),
   };
 }
@@ -45,10 +53,11 @@ export async function sendBuildWorkerCommand<TType extends BuildWorkerCommandTyp
     if (!response.ok) {
       return failedOperation(command, "operation_failed", response.message, true);
     }
-    if (!isOperationForCommand(response.body, command)) {
+    const operation = validateBuildWorkerOperation(response.body, command);
+    if (!operation.ok) {
       return failedOperation(command, "operation_failed", "build worker returned malformed operation", true);
     }
-    return response.body;
+    return operation.value;
   } catch (error) {
     return failedOperation(
       command,
@@ -125,21 +134,6 @@ function responseErrorMessage(parsed: unknown, statusCode: number) {
     return parsed.message;
   }
   return `build worker returned HTTP ${statusCode}`;
-}
-
-function isOperationForCommand<TType extends BuildWorkerCommandType>(
-  value: unknown,
-  command: BuildWorkerCommand<TType>,
-): value is BuildWorkerOperation<TType> {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    value.requestId === command.requestId &&
-    value.type === command.type &&
-    (value.status === "succeeded" || value.status === "failed") &&
-    typeof value.completedAt === "string" &&
-    (value.status === "succeeded" ? value.result !== undefined : isRecord(value.error))
-  );
 }
 
 function failedOperation<TType extends BuildWorkerCommandType>(

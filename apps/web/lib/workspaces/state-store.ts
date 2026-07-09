@@ -78,7 +78,8 @@ function database(): SQLiteDatabase | undefined {
         ON workspace_telemetry(workspace_id, id DESC);
     `);
     return database;
-  } catch {
+  } catch (error) {
+    console.error("workspace state database unavailable", { path: stateDbPath(), error });
     dbUnavailable = true;
     return undefined;
   }
@@ -111,7 +112,8 @@ export function recordActivity(entry: WorkspaceActivityEntry) {
            )`,
       )
       .run(entry.workspaceId, entry.workspaceId, MAX_ACTIVITY_ENTRIES);
-  } catch {
+  } catch (error) {
+    console.error("workspace activity write failed; using memory fallback", { workspaceId: entry.workspaceId, error });
     recordActivityInMemory(entry);
   }
 }
@@ -138,7 +140,8 @@ export function listActivity(workspaceId: string): WorkspaceActivityEntry[] {
         action: String(row.action),
         status: row.status === "failed" ? "failed" : "succeeded",
       }));
-  } catch {
+  } catch (error) {
+    console.error("workspace activity read failed; using memory fallback", { workspaceId, error });
     return memoryActivity.get(workspaceId) ?? [];
   }
 }
@@ -179,7 +182,8 @@ export function appendTelemetry(
       )
       .run(workspaceId, workspaceId, MAX_TELEMETRY_SAMPLES);
     return listTelemetry(workspaceId);
-  } catch {
+  } catch (error) {
+    console.error("workspace telemetry write failed; using memory fallback", { workspaceId, error });
     return appendTelemetryInMemory(workspaceId, entry);
   }
 }
@@ -209,7 +213,8 @@ export function listTelemetry(workspaceId: string): WorkspaceTelemetrySample[] {
             ? row.memory_percent
             : undefined,
       }));
-  } catch {
+  } catch (error) {
+    console.error("workspace telemetry read failed; using memory fallback", { workspaceId, error });
     return memoryTelemetry.get(workspaceId) ?? [];
   }
 }

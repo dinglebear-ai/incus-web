@@ -25,6 +25,7 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
   const [snapshotName, setSnapshotName] = useState("");
   const [pending, setPending] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const [loadError, setLoadError] = useState<string>();
   const [activity, setActivity] = useState<Array<{ at: string; action: string; actorEmail: string; status: string }>>([]);
   const [snapshots, setSnapshots] = useState<Array<{ name: string; createdAt?: string }>>([]);
 
@@ -32,10 +33,10 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
     const timer = window.setTimeout(() => {
       void fetchNoStore(`/api/workspaces/${workspace.id}/activity`).then((body) => {
         if (Array.isArray(body?.activity)) setActivity(body.activity);
-      });
+      }).catch((error) => setLoadError(error instanceof Error ? error.message : "failed to load activity"));
       void fetchNoStore(`/api/workspaces/${workspace.id}/snapshots`).then((body) => {
         if (Array.isArray(body?.snapshots)) setSnapshots(body.snapshots);
-      });
+      }).catch((error) => setLoadError(error instanceof Error ? error.message : "failed to load snapshots"));
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [workspace.id]);
@@ -179,6 +180,7 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
       </section>
 
       {message ? <p className="aurora-text-meta text-[var(--aurora-text-muted)]">{message}</p> : null}
+      {loadError ? <p className="aurora-text-meta text-[var(--aurora-error)]">{loadError}</p> : null}
       <section className="space-y-2 border-t border-[var(--aurora-border-default)] pt-3">
         <p className="aurora-text-ui">Activity</p>
         <div className="space-y-2">
@@ -196,14 +198,14 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
 }
 
 async function fetchNoStore(url: string) {
-  try {
-    const response = await fetch(url, {
-      headers: { "Cache-Control": "no-store" },
-    });
-    return await response.json();
-  } catch {
-    return undefined;
+  const response = await fetch(url, {
+    headers: { "Cache-Control": "no-store" },
+  });
+  const body = await response.json().catch(() => undefined);
+  if (!response.ok || body?.ok !== true) {
+    throw new Error(apiErrorMessage(body, `failed to load ${url}`));
   }
+  return body;
 }
 
 function apiErrorMessage(body: unknown, fallback: string) {

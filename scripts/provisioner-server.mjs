@@ -517,9 +517,23 @@ function invalidateWorkspaceStatus(command) {
 async function optionalText(args, options) {
   try {
     return await incusText(args, options);
-  } catch {
-    return "";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isUnsetIncusRead(message)) {
+      return "";
+    }
+    console.error("optional Incus read failed", { args, message });
+    throw err;
   }
+}
+
+function isUnsetIncusRead(message) {
+  return [
+    "not found",
+    "No such object",
+    "The requested key could not be found",
+    "Config key not found",
+  ].some((needle) => message.includes(needle));
 }
 
 async function startWorkspace(command, options) {
