@@ -72,7 +72,7 @@ describe("WorkspaceDashboard", () => {
     );
   });
 
-  it("renders actor, workspace, setup completion, and terminal link", () => {
+  it("renders actor, workspace, setup status, and terminal link", () => {
     render(<WorkspaceDashboard inventory={inventory} />);
 
     expect(screen.getByText("Test User")).toBeInTheDocument();
@@ -80,9 +80,8 @@ describe("WorkspaceDashboard", () => {
     expect(
       screen.getByRole("heading", { name: "incus-web" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("Setup: complete", { selector: "p" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Setup")).toBeInTheDocument();
+    expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.queryByText("Commands")).not.toBeInTheDocument();
     expect(screen.queryByText("Packages")).not.toBeInTheDocument();
     expect(screen.queryByText("mise")).not.toBeInTheDocument();
@@ -100,37 +99,6 @@ describe("WorkspaceDashboard", () => {
     ).toHaveAttribute("href", "/terminal/");
     expect(screen.getByRole("tab", { name: /agents/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Agent runs" })).not.toBeInTheDocument();
-  });
-
-  it("dismisses ready setup for the current container", () => {
-    render(<WorkspaceDashboard inventory={inventory} />);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /dismiss setup complete/i }),
-    );
-
-    expect(
-      screen.queryByText("Setup: complete", { selector: "p" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("respects a prior dismissal stored in localStorage without a hydration mismatch", async () => {
-    const workspace = inventory.workspaces[0];
-    window.localStorage.setItem(
-      `incus-web:setup-complete-dismissed:${workspace.id}:${workspace.createdAt}`,
-      "true",
-    );
-
-    render(<WorkspaceDashboard inventory={inventory} />);
-
-    // Initial render must start dismissed=false (matching what SSR would
-    // produce) and only flip to dismissed after the post-mount effect reads
-    // localStorage -- never synchronously from a useState initializer.
-    await waitFor(() => {
-      expect(
-        screen.queryByText("Setup: complete", { selector: "p" }),
-      ).not.toBeInTheDocument();
-    });
   });
 
   it("shows setup details while provisioning is not complete", () => {

@@ -2,7 +2,6 @@
 
 import {
   BoxesIcon,
-  CheckCircle2Icon,
   CircleGaugeIcon,
   DatabaseIcon,
   GitBranchIcon,
@@ -12,11 +11,10 @@ import {
   ShieldCheckIcon,
   TerminalIcon,
   UserRoundIcon,
-  XIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
-import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/aurora/badge";
 import {
@@ -45,10 +43,7 @@ import {
 } from "@/components/ui/aurora/tooltip";
 import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
-import {
-  WorkspaceDetailsPanel,
-  WorkspaceSettingsPanel,
-} from "@/components/workspace-details-panel";
+import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
 import {
   isLiveState,
@@ -77,6 +72,13 @@ const AgentRunDispatch = lazy(
     import("@/components/agent-run-dispatch").then(
       (mod) => ({ default: mod.AgentRunDispatch }),
     ),
+);
+const WorkspaceSettingsPanel = dynamic(
+  () =>
+    import("@/components/workspace-settings-panel").then(
+      (mod) => mod.WorkspaceSettingsPanel,
+    ),
+  { ssr: false },
 );
 
 const WORKSPACE_TABS = ["overview", "agents", "builder", "settings"] as const;
@@ -139,58 +141,6 @@ function SetupCheck({ label, status }: { label: string; status: CheckStatus }) {
         {status}
       </Badge>
     </div>
-  );
-}
-
-function SetupCompleteNotice({ workspace }: { workspace: Workspace }) {
-  const storageKey = `incus-web:setup-complete-dismissed:${workspace.id}:${workspace.createdAt}`;
-  // Start at `false` on both server and client so hydration always matches,
-  // then read the real value from localStorage post-mount. Reading
-  // localStorage inside the useState initializer would run it a second time
-  // during hydration (window defined) after SSR already rendered with a
-  // default of `false`, producing a client/server tree mismatch whenever a
-  // dismissal was previously stored.
-  const [dismissed, setDismissed] = useState(false);
-
-  useEffect(() => {
-    if (window.localStorage.getItem(storageKey) === "true") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDismissed(true);
-    }
-  }, [storageKey]);
-
-  if (workspace.setup.phase !== "ready" || dismissed) {
-    return null;
-  }
-
-  return (
-    <section className="flex items-center justify-between gap-3 rounded-[var(--aurora-radius-2)] border border-[color-mix(in_srgb,var(--aurora-success)_36%,var(--aurora-border-default))] bg-[color-mix(in_srgb,var(--aurora-success)_8%,var(--aurora-control-surface))] px-4 py-3 shadow-[var(--aurora-highlight-medium)]">
-      <div className="flex min-w-0 items-center gap-3">
-        <CheckCircle2Icon
-          aria-hidden="true"
-          className="size-4 shrink-0 text-[var(--aurora-success)]"
-        />
-        <div className="min-w-0">
-          <p className="aurora-text-ui text-[var(--aurora-text-primary)]">
-            Setup: complete
-          </p>
-          <p className="aurora-text-meta">
-            Baseline provisioning finished for this container.
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--aurora-radius-1)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] text-[var(--aurora-text-muted)] transition-colors hover:border-[var(--aurora-border-strong)] hover:text-[var(--aurora-text-primary)]"
-        aria-label="Dismiss setup complete"
-        onClick={() => {
-          window.localStorage.setItem(storageKey, "true");
-          setDismissed(true);
-        }}
-      >
-        <XIcon aria-hidden="true" className="size-3.5" />
-      </button>
-    </section>
   );
 }
 
@@ -443,7 +393,6 @@ function WorkspaceCard({
         />
 
         <WorkspaceFeatures workspace={workspace} />
-        <SetupCompleteNotice workspace={workspace} />
         <SetupProgressPanel workspace={workspace} />
       </CardContent>
     </Card>
@@ -677,7 +626,7 @@ export function WorkspaceDashboard({
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-wrap items-center gap-2 md:justify-end">
+          <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex md:justify-end">
             <DetailChip
               icon={CircleGaugeIcon}
               label="Workspaces"
@@ -712,7 +661,7 @@ export function WorkspaceDashboard({
           {inventory.workspaces.length > 0 ? (
             <>
               <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
-                <nav className="aurora-nav-shell space-y-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] p-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)]">
+                <nav className="aurora-nav-shell hidden space-y-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] p-3 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] lg:block">
                   <p className="aurora-text-label px-1 text-[var(--aurora-text-muted)]">
                     Workspaces
                   </p>
@@ -762,16 +711,17 @@ export function WorkspaceDashboard({
                   onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
                   className="min-w-0"
                 >
-                  <TabsList className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-2 pt-1 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)]">
+                  <TabsList className="grid grid-cols-4 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] px-2 pt-1 shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)] sm:inline-flex">
                     {WORKSPACE_TABS.map((tab) => (
                       <TabsTrigger
                         key={tab}
                         value={tab}
-                        className="capitalize"
+                        aria-label={tab}
+                        className="justify-center capitalize"
                         onClick={() => setActiveTab(tab)}
                       >
                         {tabIcon(tab)}
-                        {tab}
+                        <span className="hidden sm:inline">{tab}</span>
                       </TabsTrigger>
                     ))}
                   </TabsList>
@@ -784,13 +734,23 @@ export function WorkspaceDashboard({
                     ) : null}
                   </TabsContent>
                   <TabsContent value="agents">
-                    {primaryWorkspace ? <AgentsPane workspace={primaryWorkspace} /> : null}
+                    {primaryWorkspace ? (
+                      <AgentsPane
+                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                        workspace={primaryWorkspace}
+                      />
+                    ) : null}
                   </TabsContent>
                   <TabsContent value="builder">
                     <BuilderPane />
                   </TabsContent>
                   <TabsContent value="settings">
-                    {primaryWorkspace ? <SettingsPane workspace={primaryWorkspace} /> : null}
+                    {primaryWorkspace ? (
+                      <SettingsPane
+                        key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                        workspace={primaryWorkspace}
+                      />
+                    ) : null}
                   </TabsContent>
                 </Tabs>
               </div>

@@ -138,7 +138,7 @@ export function BuilderPanel() {
       }
       const result = body.operation.result as BuildStatus;
       setBuild(result);
-      setLog((current) => boundedLog(current + (result.logChunk || "")));
+      setLog((current) => appendBoundedLog(current, result.logChunk || ""));
       if (result.status === "queued" || result.status === "running") {
         pollTimerRef.current = window.setTimeout(
           () => void pollBuild(buildId, result.logOffset),
@@ -277,8 +277,9 @@ export function BuilderPanel() {
       </div>
 
       <ButtonGroup>
-        <Button asChild variant="neutral" iconLeft={<UploadIcon aria-hidden="true" />}>
-          <label>
+        <Button asChild variant="neutral">
+          <label className="inline-flex items-center gap-2">
+            <UploadIcon aria-hidden="true" className="size-4" />
             Import devcontainer
             <input className="sr-only" type="file" accept=".json" onChange={(event) => {
               const file = event.target.files?.[0];
@@ -286,8 +287,9 @@ export function BuilderPanel() {
             }} />
           </label>
         </Button>
-        <Button asChild variant="neutral" iconLeft={<UploadIcon aria-hidden="true" />}>
-          <label>
+        <Button asChild variant="neutral">
+          <label className="inline-flex items-center gap-2">
+            <UploadIcon aria-hidden="true" className="size-4" />
             Import mise
             <input className="sr-only" type="file" accept=".toml,.tool-versions" onChange={(event) => {
               const file = event.target.files?.[0];
@@ -332,19 +334,25 @@ export function BuilderPanel() {
           <p className="aurora-text-ui">Presets</p>
           <div className="mt-2 space-y-2">
             {presets.map((preset) => (
-              <button
+              <Item
                 key={preset.id}
-                type="button"
-                className="block w-full rounded-[8px] border border-[var(--aurora-border-default)] p-2 text-left aurora-text-meta hover:bg-[var(--aurora-hover-bg)]"
-                onClick={() => {
-                  setDistro(preset.distro);
-                  setRelease(preset.release);
-                  setPackages(preset.packages);
-                  setPostInstall(preset.postInstallCommands.join("\n"));
-                }}
-              >
-                {preset.name}
-              </button>
+                title={preset.name}
+                description={`${preset.distro}/${preset.release} · ${preset.packages.length} package(s)`}
+                action={
+                  <Button
+                    size="sm"
+                    variant="neutral"
+                    onClick={() => {
+                      setDistro(preset.distro);
+                      setRelease(preset.release);
+                      setPackages(preset.packages);
+                      setPostInstall(preset.postInstallCommands.join("\n"));
+                    }}
+                  >
+                    Load
+                  </Button>
+                }
+              />
             ))}
           </div>
         </section>
@@ -357,7 +365,8 @@ function postInstallCommands(value: string) {
   return value.split("\n").map((entry) => entry.trim()).filter(Boolean);
 }
 
-function boundedLog(value: string) {
-  if (value.length <= MAX_LOG_CHARS) return value;
-  return value.slice(value.length - MAX_LOG_CHARS);
+function appendBoundedLog(current: string, chunk: string) {
+  const safeChunk = chunk.length > MAX_LOG_CHARS ? chunk.slice(-MAX_LOG_CHARS) : chunk;
+  const keepFromCurrent = Math.max(0, MAX_LOG_CHARS - safeChunk.length);
+  return (keepFromCurrent > 0 ? current.slice(-keepFromCurrent) : "") + safeChunk;
 }
