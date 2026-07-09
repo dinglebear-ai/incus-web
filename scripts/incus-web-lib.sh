@@ -58,7 +58,29 @@ install_incus_if_needed() {
 
 INCUS_USE_SUDO=0
 
+# `incus` subcommands that can accept a full YAML/text object (create,
+# edit, launch, and similar) will block reading from stdin until EOF
+# whenever stdin isn't explicitly closed -- even when the command line
+# already fully specifies everything and nothing was meant to be piped in.
+# This is confirmed, maintainer-explained upstream behavior, not
+# incus-web-specific: https://github.com/lxc/incus/issues/1467. Redirecting
+# from /dev/null here closes that door for every call site that goes
+# through this wrapper, which is all of them except the two below that
+# deliberately feed real content via incus_cmd_stdin.
 incus_cmd() {
+  if [[ "$INCUS_USE_SUDO" == "1" ]]; then
+    sudo incus "$@" </dev/null
+  else
+    incus "$@" </dev/null
+  fi
+}
+
+# For the rare commands that legitimately consume YAML/text via stdin
+# (`profile edit <file`, `network acl edit <<EOF`). Routing these through
+# the default incus_cmd would break them -- its </dev/null always wins
+# over whatever the caller redirected in, since it's attached directly to
+# the incus invocation inside the function body, not to the wrapper call.
+incus_cmd_stdin() {
   if [[ "$INCUS_USE_SUDO" == "1" ]]; then
     sudo incus "$@"
   else
@@ -116,7 +138,7 @@ ensure_agent_network() {
     incus_cmd network acl create "$INCUS_ACL"
   fi
 
-  incus_cmd network acl edit "$INCUS_ACL" <<EOF
+  incus_cmd_stdin network acl edit "$INCUS_ACL" <<EOF
 name: $INCUS_ACL
 description: "Deny egress from incus-web agent containers to local/LAN ranges while allowing Internet."
 egress:
@@ -168,7 +190,7 @@ ensure_incus_profile() {
   fi
 
   log "applying Incus profile source of truth $INCUS_PROFILE_YAML"
-  incus_cmd profile edit "$INCUS_PROFILE_NAME" <"$INCUS_PROFILE_YAML"
+  incus_cmd_stdin profile edit "$INCUS_PROFILE_NAME" <"$INCUS_PROFILE_YAML"
 }
 
 ensure_profile_paths() {
