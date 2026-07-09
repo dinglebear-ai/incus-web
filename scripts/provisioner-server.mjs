@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, stat, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { join } from "node:path";
@@ -76,8 +76,8 @@ const maxGoldenConfigBytes = Number.parseInt(
   10,
 );
 let activeIncusCommands = 0;
-let statusCache;
-let statusInFlight;
+const statusCache = new Map();
+const statusInFlight = new Map();
 const agentRunConfig = agentRunConfigFromEnv();
 const agentRunStore = createAgentRunStore(agentRunConfig.storePath);
 const setupPhases = new Set([
@@ -89,6 +89,8 @@ const setupPhases = new Set([
   "ready",
   "failed",
 ]);
+const workspaceHostPathRoot =
+  process.env.INCUS_WEB_WORKSPACE_HOST_PATH_ROOT || "/var/lib/incus-web/workspaces";
 
 function parseMode(value) {
   if (!/^[0-7]{3,4}$/.test(value)) {
@@ -412,12 +414,63 @@ async function getWorkspaceStatus(command, options) {
     "root",
     "size",
   ], options);
+  const rootDiskPool = await optionalText([
+    "config",
+    "device",
+    "get",
+    incusContainer,
+    "root",
+    "pool",
+  ], options);
+  const networkBridge = await optionalText([
+    "config",
+    "device",
+    "get",
+    incusContainer,
+    "eth0",
+    "network",
+  ], options);
+  const workspaceHostPath = await optionalText([
+    "config",
+    "device",
+    "get",
+    incusContainer,
+    "workspace",
+    "source",
+  ], options);
+  const workspaceMountPath = await optionalText([
+    "config",
+    "device",
+    "get",
+    incusContainer,
+    "workspace",
+    "path",
+  ], options);
+  const processesLimit = await optionalText([
+    "config",
+    "get",
+    incusContainer,
+    "limits.processes",
+  ], options);
 
   return {
     workspaceId: command.workspace.id,
     state: mapIncusState(state.status, state.status_code),
     incusProject: command.workspace.incusProject,
     incusContainer: command.workspace.incusContainer,
+    image:
+      instance.config?.["image.description"] ||
+      instance.config?.["volatile.base_image"] ||
+      undefined,
+    storagePool: rootDiskPool || undefined,
+    networkBridge: networkBridge || undefined,
+    workspaceHostPath: workspaceHostPath || undefined,
+    workspaceMountPath: workspaceMountPath || undefined,
+    effectiveLimits: {
+      cpu: cpuLimit || undefined,
+      memory: memoryLimit || undefined,
+      processes: processesLimit || undefined,
+    },
     cpuCount: parseCpuLimit(cpuLimit),
     memoryUsedBytes: numberValue(state.memory?.usage),
     memoryLimitBytes: parseByteLimit(memoryLimit),
@@ -432,24 +485,33 @@ async function getWorkspaceStatus(command, options) {
 
 async function getCachedWorkspaceStatus(command, options) {
   const now = Date.now();
-  if (statusCache && statusCache.expiresAt > now) {
-    return statusCache.value;
+  const key = command.workspace.id;
+  const cached = statusCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
   }
-  if (statusInFlight) {
-    return statusInFlight;
+  const inFlight = statusInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
   }
-  statusInFlight = getWorkspaceStatus(command, options)
+  const promise = getWorkspaceStatus(command, options)
     .then((status) => {
-      statusCache = {
+      statusCache.set(key, {
         value: status,
         expiresAt: Date.now() + statusCacheTtlMs,
-      };
+      });
       return status;
     })
     .finally(() => {
-      statusInFlight = undefined;
+      statusInFlight.delete(key);
     });
-  return statusInFlight;
+  statusInFlight.set(key, promise);
+  return promise;
+}
+
+function invalidateWorkspaceStatus(command) {
+  statusCache.delete(command.workspace.id);
+  statusInFlight.delete(command.workspace.id);
 }
 
 async function optionalText(args, options) {
@@ -465,7 +527,7 @@ async function startWorkspace(command, options) {
   if (current.state !== "running") {
     await incusText(["start", incusContainer], options);
   }
-  statusCache = undefined;
+  invalidateWorkspaceStatus(command);
   const status = await getWorkspaceStatus(command, options);
   return {
     workspaceId: command.workspace.id,
@@ -484,7 +546,7 @@ async function stopWorkspace(command, options) {
   if (current.state !== "stopped") {
     await incusText(args, options);
   }
-  statusCache = undefined;
+  invalidateWorkspaceStatus(command);
   return {
     workspaceId: command.workspace.id,
     state: "stopped",
@@ -500,7 +562,7 @@ async function restartWorkspace(command, options) {
   } else {
     await incusText(["start", incusContainer], options);
   }
-  statusCache = undefined;
+  invalidateWorkspaceStatus(command);
   return {
     workspaceId: command.workspace.id,
     state: "running",
@@ -558,6 +620,81 @@ function validateLimitsPayload(payload) {
   return undefined;
 }
 
+function validateMountPayload(payload) {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "SetWorkspaceMount payload must be an object";
+  }
+  const allowedKeys = new Set(["hostPath"]);
+  for (const key of Object.keys(payload)) {
+    if (!allowedKeys.has(key)) {
+      return "SetWorkspaceMount payload contains unsupported fields";
+    }
+  }
+  if (
+    typeof payload.hostPath !== "string" ||
+    payload.hostPath.length === 0 ||
+    payload.hostPath.length > 1024 ||
+    !payload.hostPath.startsWith("/") ||
+    payload.hostPath.includes("\0")
+  ) {
+    return "hostPath must be an absolute host path";
+  }
+  return undefined;
+}
+
+const SNAPSHOT_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,62}$/i;
+
+function validateSnapshotPayload(payload) {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return "CreateWorkspaceSnapshot payload must be an object";
+  }
+  const allowedKeys = new Set(["name"]);
+  for (const key of Object.keys(payload)) {
+    if (!allowedKeys.has(key)) {
+      return "CreateWorkspaceSnapshot payload contains unsupported fields";
+    }
+  }
+  if (
+    payload.name !== undefined &&
+    (typeof payload.name !== "string" ||
+      !SNAPSHOT_NAME_PATTERN.test(payload.name) ||
+      payload.name.includes(".."))
+  ) {
+    return "snapshot name must be 1-63 letters, numbers, dots, dashes, or underscores";
+  }
+  return undefined;
+}
+
+async function assertAllowedWorkspaceHostPath(command) {
+  const invalidReason = validateMountPayload(command.payload);
+  if (invalidReason) {
+    throw Object.assign(new Error(invalidReason), { code: "invalid_input" });
+  }
+
+  const hostPath = command.payload.hostPath;
+  const expectedRoot = await realpath(workspaceHostPathRoot);
+  const allowedPrefix = `${expectedRoot.replace(/\/+$/, "")}/${command.workspace.id}/`;
+  const finalStat = await lstat(hostPath);
+  if (finalStat.isSymbolicLink()) {
+    throw Object.assign(new Error("workspace mount path must not be a symlink"), {
+      code: "invalid_input",
+    });
+  }
+  if (!finalStat.isDirectory()) {
+    throw Object.assign(new Error("workspace mount path must be an existing directory"), {
+      code: "invalid_input",
+    });
+  }
+  const resolved = `${await realpath(hostPath)}/`;
+  if (!resolved.startsWith(allowedPrefix)) {
+    throw Object.assign(
+      new Error(`workspace mount path must stay under ${allowedPrefix}`),
+      { code: "invalid_input" },
+    );
+  }
+  return resolved.slice(0, -1);
+}
+
 // `incus config unset` exits non-zero when the key is already unset, so a
 // bare optionalText()-wrapped unset would swallow every failure -- daemon
 // down, permission denied, timeout -- as if it were that one idempotent
@@ -594,12 +731,110 @@ async function setWorkspaceLimits(command, options) {
     await clearLimitIfSet(incusContainer, "limits.memory", options);
   }
 
-  statusCache = undefined;
+  invalidateWorkspaceStatus(command);
   const status = await getWorkspaceStatus(command, options);
   return {
     workspaceId: command.workspace.id,
     state: status.state === "running" ? "running" : "stopped",
     status,
+  };
+}
+
+async function setWorkspaceMount(command, options) {
+  const hostPath = await assertAllowedWorkspaceHostPath(command);
+  await incusText([
+    "config",
+    "device",
+    "override",
+    incusContainer,
+    "workspace",
+    `source=${hostPath}`,
+    "path=/workspace",
+    "shift=true",
+  ], options);
+
+  invalidateWorkspaceStatus(command);
+  const status = await getWorkspaceStatus(command, options);
+  return {
+    workspaceId: command.workspace.id,
+    state: status.state === "running" ? "running" : "stopped",
+    status,
+  };
+}
+
+async function clearWorkspaceMount(command, options) {
+  // Incus disk device overrides clear correctly by PATCHing the instance
+  // device map with the `source` key omitted. Setting source="" leaves an
+  // explicit empty override behind, which is the exact production footgun
+  // this command is meant to avoid.
+  const instance = await incusJson(["query", `/1.0/instances/${incusContainer}`], options);
+  const devices = { ...(instance.devices || {}) };
+  const workspace = { ...(devices.workspace || {}) };
+  delete workspace.source;
+  devices.workspace = workspace;
+  await incusJson(
+    ["query", `/1.0/instances/${incusContainer}`, "-X", "PATCH"],
+    { ...options, input: JSON.stringify({ devices }) },
+  );
+
+  invalidateWorkspaceStatus(command);
+  const status = await getWorkspaceStatus(command, options);
+  return {
+    workspaceId: command.workspace.id,
+    state: status.state === "running" ? "running" : "stopped",
+    status,
+  };
+}
+
+function generatedSnapshotName() {
+  return `manual-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "z")}`;
+}
+
+function normalizeSnapshot(snapshot) {
+  const rawName =
+    typeof snapshot?.name === "string"
+      ? snapshot.name
+      : typeof snapshot === "string"
+        ? snapshot.split("/").pop()
+        : "";
+  const name = rawName.includes("/") ? rawName.split("/").pop() : rawName;
+  return {
+    name,
+    createdAt:
+      typeof snapshot?.created_at === "string" && snapshot.created_at.length > 0
+        ? snapshot.created_at
+        : undefined,
+    stateful: Boolean(snapshot?.stateful),
+  };
+}
+
+async function listWorkspaceSnapshots(command, options) {
+  const snapshots = await incusJson(
+    ["query", `/1.0/instances/${incusContainer}/snapshots?recursion=1`],
+    options,
+  );
+  return {
+    workspaceId: command.workspace.id,
+    snapshots: (Array.isArray(snapshots) ? snapshots : [])
+      .map(normalizeSnapshot)
+      .filter((snapshot) => snapshot.name),
+  };
+}
+
+async function createWorkspaceSnapshot(command, options) {
+  const invalidReason = validateSnapshotPayload(command.payload);
+  if (invalidReason) {
+    throw Object.assign(new Error(invalidReason), { code: "invalid_input" });
+  }
+  const name = command.payload?.name || generatedSnapshotName();
+  await incusText(["snapshot", incusContainer, name], options);
+  return {
+    workspaceId: command.workspace.id,
+    snapshot: {
+      name,
+      createdAt: new Date().toISOString(),
+      stateful: false,
+    },
   };
 }
 
@@ -882,6 +1117,30 @@ async function handleCommand(command, options) {
           command,
           "succeeded",
           await setWorkspaceLimits(command, options),
+        );
+      case "SetWorkspaceMount":
+        return operation(
+          command,
+          "succeeded",
+          await setWorkspaceMount(command, options),
+        );
+      case "ClearWorkspaceMount":
+        return operation(
+          command,
+          "succeeded",
+          await clearWorkspaceMount(command, options),
+        );
+      case "CreateWorkspaceSnapshot":
+        return operation(
+          command,
+          "succeeded",
+          await createWorkspaceSnapshot(command, options),
+        );
+      case "ListWorkspaceSnapshots":
+        return operation(
+          command,
+          "succeeded",
+          await listWorkspaceSnapshots(command, options),
         );
       case "ImportGoldenConfig":
         return operation(

@@ -49,6 +49,19 @@ export function prototypeRuntimeStatus(
     state: "running",
     incusProject: workspace.incusProject,
     incusContainer: workspace.incusContainer,
+    image: stringEnv("INCUS_WEB_TEMPLATE_VERSION", "ubuntu-24.04-code-v1"),
+    storagePool: stringEnv("INCUS_WEB_PROTOTYPE_STORAGE_POOL", "default"),
+    networkBridge: stringEnv("INCUS_NETWORK", "agentbr0"),
+    workspaceHostPath: stringEnv(
+      "INCUS_WEB_PROTOTYPE_WORKSPACE_HOST_PATH",
+      "/srv/incus-web/default-workspace",
+    ),
+    workspaceMountPath: "/workspace",
+    effectiveLimits: {
+      cpu: String(numberEnv("INCUS_WEB_PROTOTYPE_CPU", 2)),
+      memory: formatBytes(numberEnv("INCUS_WEB_PROTOTYPE_MEMORY_BYTES", 4 * gib)),
+      processes: "2048",
+    },
     cpuCount: numberEnv("INCUS_WEB_PROTOTYPE_CPU", 2),
     memoryUsedBytes: numberEnv("INCUS_WEB_PROTOTYPE_MEMORY_USED_BYTES", 96 * 1024 * 1024),
     memoryLimitBytes: numberEnv("INCUS_WEB_PROTOTYPE_MEMORY_BYTES", 4 * gib),
@@ -70,7 +83,12 @@ export function statusToWorkspace(
     slug: "incus-web",
     incusProject: status.incusProject,
     incusContainer: status.incusContainer,
-    templateVersion: stringEnv(
+    image: status.image,
+    storagePool: status.storagePool,
+    networkBridge: status.networkBridge,
+    workspaceHostPath: status.workspaceHostPath,
+    workspaceMountPath: status.workspaceMountPath,
+    templateVersion: status.image ?? stringEnv(
       "INCUS_WEB_TEMPLATE_VERSION",
       "ubuntu-24.04-code-v1",
     ),
@@ -82,6 +100,9 @@ export function statusToWorkspace(
       storage: bytePair(status.rootDiskUsedBytes, status.rootDiskLimitBytes, {
         empty: "host quota pending",
       }),
+      effectiveCpu: status.effectiveLimits?.cpu,
+      effectiveMemory: status.effectiveLimits?.memory,
+      effectiveProcesses: status.effectiveLimits?.processes,
     },
     metrics: {
       cpuCount: status.cpuCount,

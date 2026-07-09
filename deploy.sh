@@ -73,6 +73,16 @@ main() {
   INCUS_WEB_PROVISIONER_SERVICE_AUTH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH:-$SCRIPT_DIR/scripts/service-auth.mjs}"
   INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/service-auth.mjs}"
   INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH:-/usr/local/lib/incus-web/service-auth.mjs}"
+  ENABLE_BUILD_WORKER="${ENABLE_BUILD_WORKER:-$ENABLE_HOST_PROVISIONER}"
+  INCUS_WEB_BUILD_WORKER_SERVER="${INCUS_WEB_BUILD_WORKER_SERVER:-$SCRIPT_DIR/scripts/build-worker.mjs}"
+  INCUS_WEB_BUILD_WORKER_SERVER_URL="${INCUS_WEB_BUILD_WORKER_SERVER_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/build-worker.mjs}"
+  INCUS_WEB_BUILD_WORKER_INSTALL_PATH="${INCUS_WEB_BUILD_WORKER_INSTALL_PATH:-/usr/local/lib/incus-web/build-worker.mjs}"
+  INCUS_WEB_BUILD_WORKER_ENV_FILE="${INCUS_WEB_BUILD_WORKER_ENV_FILE:-/etc/incus-web/build-worker.env}"
+  INCUS_WEB_BUILD_WORKER_TOKEN_FILE="${INCUS_WEB_BUILD_WORKER_TOKEN_FILE:-/etc/incus-web/build-worker.token}"
+  INCUS_WEB_BUILD_WORKER_SOCKET="${INCUS_WEB_BUILD_WORKER_SOCKET:-/run/incus-web/build-worker.sock}"
+  INCUS_WEB_BUILD_WORKER_SOCKET_MODE="${INCUS_WEB_BUILD_WORKER_SOCKET_MODE:-0660}"
+  INCUS_WEB_BUILD_WORKER_USER="${INCUS_WEB_BUILD_WORKER_USER:-incus-web-builder}"
+  INCUS_WEB_BUILD_WORKER_STATE_DIR="${INCUS_WEB_BUILD_WORKER_STATE_DIR:-/var/lib/incus-web/build-worker}"
   INCUS_WEB_PROVISIONER_ENV_FILE="${INCUS_WEB_PROVISIONER_ENV_FILE:-/etc/incus-web/provisioner.env}"
   INCUS_WEB_PROVISIONER_TOKEN_FILE="${INCUS_WEB_PROVISIONER_TOKEN_FILE:-/etc/incus-web/provisioner.token}"
   INCUS_WEB_PROVISIONER_SOCKET="${INCUS_WEB_PROVISIONER_SOCKET:-/run/incus-web/provisioner.sock}"
@@ -112,6 +122,7 @@ main() {
   fi
   INCUS_WEB_APP_ENV_FILE="${INCUS_WEB_APP_ENV_FILE:-/etc/incus-web/web.env}"
   INCUS_WEB_APP_USER="${INCUS_WEB_APP_USER:-incus-web-app}"
+  INCUS_WEB_WORKSPACE_STATE_DB="${INCUS_WEB_WORKSPACE_STATE_DB:-/var/lib/incus-web-app/workspace-state.sqlite3}"
   INCUS_WEB_APP_HOST="${INCUS_WEB_APP_HOST:-$OIDC_HOST_BIND}"
   INCUS_WEB_APP_PORT="${INCUS_WEB_APP_PORT:-3090}"
   INCUS_WEB_WORKSPACE_OWNER_MODE="${INCUS_WEB_WORKSPACE_OWNER_MODE:-none}"
@@ -191,6 +202,7 @@ main() {
       configure_access "$CONTAINER_NAME"
       validate_container "$CONTAINER_NAME"
       configure_host_provisioner "$CONTAINER_NAME"
+      configure_build_worker
       configure_host_web_app
       log "ready"
       log "container: $CONTAINER_NAME"
@@ -223,6 +235,7 @@ main() {
   configure_access "$CONTAINER_NAME"
   validate_container "$CONTAINER_NAME"
   configure_host_provisioner "$CONTAINER_NAME"
+  configure_build_worker
   configure_host_web_app
 
   log "ready"

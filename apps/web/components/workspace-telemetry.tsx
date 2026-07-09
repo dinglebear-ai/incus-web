@@ -90,7 +90,7 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
       const next = body.workspace as Workspace;
       const polledAt = Date.now();
       setWorkspace(next);
-      setHistory((current) =>
+      setHistory(Array.isArray(body.history) ? body.history : (current) =>
         [...current, sampleFrom(next)].slice(-HISTORY_LENGTH),
       );
       setLastUpdated(polledAt);

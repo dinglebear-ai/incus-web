@@ -10,6 +10,10 @@ export const PROVISIONER_COMMAND_TYPES = [
   "DispatchAgentRun",
   "ListAgentRuns",
   "SetWorkspaceLimits",
+  "SetWorkspaceMount",
+  "ClearWorkspaceMount",
+  "CreateWorkspaceSnapshot",
+  "ListWorkspaceSnapshots",
   "ImportGoldenConfig",
 ] as const;
 
@@ -23,6 +27,9 @@ export const PROVISIONER_COMMAND_TYPES = [
 // a build error, not a silent runtime gap.
 export const MUTATING_COMMAND_TYPES = [
   "SetWorkspaceLimits",
+  "SetWorkspaceMount",
+  "ClearWorkspaceMount",
+  "CreateWorkspaceSnapshot",
   "ImportGoldenConfig",
 ] as const satisfies readonly (typeof PROVISIONER_COMMAND_TYPES)[number][];
 
@@ -144,6 +151,16 @@ export type WorkspaceRuntimeStatus = {
   state: ProvisionerWorkspaceState;
   incusProject: IncusProjectName;
   incusContainer: IncusContainerName;
+  image?: string;
+  storagePool?: string;
+  networkBridge?: string;
+  workspaceHostPath?: string;
+  workspaceMountPath?: string;
+  effectiveLimits?: {
+    cpu?: string;
+    memory?: string;
+    processes?: string;
+  };
   cpuCount?: number;
   memoryUsedBytes?: number;
   memoryLimitBytes?: number;
@@ -175,6 +192,22 @@ export type RestartWorkspacePayload = {
 export type SetWorkspaceLimitsPayload = {
   cpu?: string;
   memory?: string;
+};
+
+export type SetWorkspaceMountPayload = {
+  hostPath: string;
+};
+
+export type ClearWorkspaceMountPayload = Record<string, never>;
+export type CreateWorkspaceSnapshotPayload = {
+  name?: string;
+};
+export type ListWorkspaceSnapshotsPayload = Record<string, never>;
+
+export type WorkspaceSnapshot = {
+  name: string;
+  createdAt?: string;
+  stateful: boolean;
 };
 
 // The zip itself is staged to disk by the API route (see
@@ -277,6 +310,16 @@ export type LifecycleWorkspaceResult = {
 };
 
 export type SetWorkspaceLimitsResult = LifecycleWorkspaceResult;
+export type SetWorkspaceMountResult = LifecycleWorkspaceResult;
+export type ClearWorkspaceMountResult = LifecycleWorkspaceResult;
+export type CreateWorkspaceSnapshotResult = {
+  workspaceId: WorkspaceId;
+  snapshot: WorkspaceSnapshot;
+};
+export type ListWorkspaceSnapshotsResult = {
+  workspaceId: WorkspaceId;
+  snapshots: WorkspaceSnapshot[];
+};
 
 export type ImportGoldenConfigResult = {
   workspaceId: WorkspaceId;
@@ -311,6 +354,10 @@ export type ProvisionerCommandPayloadMap = {
   DispatchAgentRun: DispatchAgentRunPayload;
   ListAgentRuns: ListAgentRunsPayload;
   SetWorkspaceLimits: SetWorkspaceLimitsPayload;
+  SetWorkspaceMount: SetWorkspaceMountPayload;
+  ClearWorkspaceMount: ClearWorkspaceMountPayload;
+  CreateWorkspaceSnapshot: CreateWorkspaceSnapshotPayload;
+  ListWorkspaceSnapshots: ListWorkspaceSnapshotsPayload;
   ImportGoldenConfig: ImportGoldenConfigPayload;
 };
 
@@ -324,6 +371,10 @@ export type ProvisionerCommandResultMap = {
   DispatchAgentRun: DispatchAgentRunResult;
   ListAgentRuns: ListAgentRunsResult;
   SetWorkspaceLimits: SetWorkspaceLimitsResult;
+  SetWorkspaceMount: SetWorkspaceMountResult;
+  ClearWorkspaceMount: ClearWorkspaceMountResult;
+  CreateWorkspaceSnapshot: CreateWorkspaceSnapshotResult;
+  ListWorkspaceSnapshots: ListWorkspaceSnapshotsResult;
   ImportGoldenConfig: ImportGoldenConfigResult;
 };
 
@@ -623,6 +674,26 @@ export function validateWorkspaceRuntimeStatus(
     return invalid("setupPhase is invalid");
   }
   if (
+    !hasOptionalString(status.image) ||
+    !hasOptionalString(status.storagePool) ||
+    !hasOptionalString(status.networkBridge) ||
+    !hasOptionalString(status.workspaceHostPath) ||
+    !hasOptionalString(status.workspaceMountPath)
+  ) {
+    return invalid("workspace status metadata is invalid");
+  }
+  if (status.effectiveLimits !== undefined) {
+    if (
+      !isRecord(status.effectiveLimits) ||
+      !hasOnlyKeys(status.effectiveLimits, ["cpu", "memory", "processes"]) ||
+      !hasOptionalString(status.effectiveLimits.cpu) ||
+      !hasOptionalString(status.effectiveLimits.memory) ||
+      !hasOptionalString(status.effectiveLimits.processes)
+    ) {
+      return invalid("workspace status effective limits are invalid");
+    }
+  }
+  if (
     !hasOptionalNonNegativeNumber(status.cpuCount) ||
     !hasOptionalNonNegativeNumber(status.memoryUsedBytes) ||
     !hasOptionalNonNegativeNumber(status.memoryLimitBytes) ||
@@ -793,6 +864,14 @@ function validateCommandPayload(
       return validateListAgentRunsPayload(payload);
     case "SetWorkspaceLimits":
       return validateSetWorkspaceLimitsPayload(payload);
+    case "SetWorkspaceMount":
+      return validateSetWorkspaceMountPayload(payload);
+    case "ClearWorkspaceMount":
+      return validateEmptyPayload(payload);
+    case "CreateWorkspaceSnapshot":
+      return validateCreateWorkspaceSnapshotPayload(payload);
+    case "ListWorkspaceSnapshots":
+      return validateEmptyPayload(payload);
     case "ImportGoldenConfig":
       return validateImportGoldenConfigPayload(payload);
   }
@@ -898,6 +977,49 @@ function validateSetWorkspaceLimitsPayload(
   return { ok: true, value: payload as SetWorkspaceLimitsPayload };
 }
 
+function validateSetWorkspaceMountPayload(
+  payload: unknown,
+): ValidationResult<SetWorkspaceMountPayload> {
+  if (!isRecord(payload)) {
+    return invalid("SetWorkspaceMount payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["hostPath"])) {
+    return invalid("SetWorkspaceMount payload contains unsupported fields");
+  }
+  if (
+    typeof payload.hostPath !== "string" ||
+    payload.hostPath.length === 0 ||
+    payload.hostPath.length > 1024 ||
+    !payload.hostPath.startsWith("/") ||
+    payload.hostPath.includes("\0")
+  ) {
+    return invalid("hostPath must be an absolute host path");
+  }
+  return { ok: true, value: payload as SetWorkspaceMountPayload };
+}
+
+const SNAPSHOT_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,62}$/i;
+
+function validateCreateWorkspaceSnapshotPayload(
+  payload: unknown,
+): ValidationResult<CreateWorkspaceSnapshotPayload> {
+  if (!isRecord(payload)) {
+    return invalid("CreateWorkspaceSnapshot payload must be an object");
+  }
+  if (!hasOnlyKeys(payload, ["name"])) {
+    return invalid("CreateWorkspaceSnapshot payload contains unsupported fields");
+  }
+  if (
+    payload.name !== undefined &&
+    (typeof payload.name !== "string" ||
+      !SNAPSHOT_NAME_PATTERN.test(payload.name) ||
+      payload.name.includes(".."))
+  ) {
+    return invalid("snapshot name must be 1-63 letters, numbers, dots, dashes, or underscores");
+  }
+  return { ok: true, value: payload as CreateWorkspaceSnapshotPayload };
+}
+
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 
 function validateImportGoldenConfigPayload(
@@ -952,10 +1074,58 @@ function validateOperationResult(
     case "ListAgentRuns":
       return validateListAgentRunsResult(result, workspace);
     case "SetWorkspaceLimits":
+    case "SetWorkspaceMount":
+    case "ClearWorkspaceMount":
       return validateLifecycleWorkspaceResult(result, workspace, undefined, false);
+    case "CreateWorkspaceSnapshot":
+      return validateCreateWorkspaceSnapshotResult(result, workspace);
+    case "ListWorkspaceSnapshots":
+      return validateListWorkspaceSnapshotsResult(result, workspace);
     case "ImportGoldenConfig":
       return validateImportGoldenConfigResult(result, workspace);
   }
+}
+
+function validateCreateWorkspaceSnapshotResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<CreateWorkspaceSnapshotResult> {
+  if (!isRecord(result)) {
+    return invalid("CreateWorkspaceSnapshot result must be an object");
+  }
+  if (result.workspaceId !== workspace.id) {
+    return metadataMismatch("CreateWorkspaceSnapshot result workspace did not match request");
+  }
+  if (!isWorkspaceSnapshot(result.snapshot)) {
+    return invalid("CreateWorkspaceSnapshot result snapshot is invalid");
+  }
+  return { ok: true, value: result as CreateWorkspaceSnapshotResult };
+}
+
+function validateListWorkspaceSnapshotsResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<ListWorkspaceSnapshotsResult> {
+  if (!isRecord(result)) {
+    return invalid("ListWorkspaceSnapshots result must be an object");
+  }
+  if (result.workspaceId !== workspace.id) {
+    return metadataMismatch("ListWorkspaceSnapshots result workspace did not match request");
+  }
+  if (!Array.isArray(result.snapshots) || !result.snapshots.every(isWorkspaceSnapshot)) {
+    return invalid("ListWorkspaceSnapshots result snapshots are invalid");
+  }
+  return { ok: true, value: result as ListWorkspaceSnapshotsResult };
+}
+
+function isWorkspaceSnapshot(value: unknown): value is WorkspaceSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    (value.createdAt === undefined || isIsoTimestamp(value.createdAt)) &&
+    typeof value.stateful === "boolean"
+  );
 }
 
 function validateImportGoldenConfigResult(
@@ -1142,6 +1312,10 @@ function hasOptionalCheckStatus(value: unknown): boolean {
     value === "missing" ||
     value === "unknown"
   );
+}
+
+function hasOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
 }
 
 function isAllowedGithubHttpsRepo(value: string): boolean {

@@ -130,6 +130,9 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
             "failed to dispatch agent run",
         );
       }
+      if (!body.run || typeof body.run.id !== "string") {
+        throw new Error("agent run response was invalid");
+      }
       setRuns((current) => [
         body.run,
         ...current.filter((run) => run.id !== body.run.id),

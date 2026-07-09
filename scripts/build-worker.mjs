@@ -1,0 +1,547 @@
+#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { createConnection } from "node:net";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { requireConfiguredToken, verifyBearerToken } from "./service-auth.mjs";
+
+const token = requireConfiguredToken(
+  process.env.INCUS_WEB_BUILD_WORKER_TOKEN,
+  "INCUS_WEB_BUILD_WORKER_TOKEN",
+);
+const socketPath = process.env.INCUS_WEB_BUILD_WORKER_SOCKET || "/run/incus-web/build-worker.sock";
+const socketMode = parseInt(process.env.INCUS_WEB_BUILD_WORKER_SOCKET_MODE || "0660", 8);
+const stateDir = process.env.INCUS_WEB_BUILD_WORKER_STATE_DIR || "/var/lib/incus-web/build-worker";
+const dbPath = process.env.INCUS_WEB_BUILD_WORKER_DB || join(stateDir, "builds.sqlite3");
+const workDir = process.env.INCUS_WEB_BUILD_WORKER_WORK_DIR || join(stateDir, "work");
+const lockPath = process.env.INCUS_WEB_BUILD_WORKER_LOCK || join(stateDir, "build.lock");
+const distrobuilderBin = process.env.DISTROBUILDER_BIN || "distrobuilder";
+const commandTimeoutMs = Number.parseInt(
+  process.env.INCUS_WEB_BUILD_WORKER_COMMAND_TIMEOUT_MS || String(45 * 60 * 1000),
+  10,
+);
+const maxBodyBytes = Number.parseInt(process.env.INCUS_WEB_BUILD_WORKER_MAX_BODY_BYTES || "262144", 10);
+
+await mkdir(dirname(socketPath), { recursive: true });
+await mkdir(stateDir, { recursive: true });
+await mkdir(workDir, { recursive: true });
+await unlinkExistingSocket(socketPath);
+
+const { DatabaseSync } = await loadSQLite();
+const db = new DatabaseSync(dbPath);
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  CREATE TABLE IF NOT EXISTS builds (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    image_alias TEXT NOT NULL,
+    distro TEXT NOT NULL,
+    release TEXT NOT NULL,
+    based_on TEXT,
+    definition_yaml TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE(owner_user_id, idempotency_key)
+  );
+  CREATE TABLE IF NOT EXISTS build_logs (
+    build_id TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    chunk TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS image_registry (
+    image_alias TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    build_id TEXT NOT NULL,
+    distro TEXT NOT NULL,
+    release TEXT NOT NULL,
+    based_on TEXT,
+    is_master INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS build_presets (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    distro TEXT NOT NULL,
+    release TEXT NOT NULL,
+    packages_json TEXT NOT NULL,
+    post_install_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, name)
+  );
+`);
+
+const server = createServer(async (req, res) => {
+  if (req.url === "/healthz") {
+    send(res, 200, { status: "ok" });
+    return;
+  }
+  if (req.method !== "POST" || req.url !== "/v1/builds") {
+    send(res, 404, { code: "not_found", message: "not found", retryable: false });
+    return;
+  }
+  if (!verifyBearerToken(req.headers.authorization, token)) {
+    send(res, 401, {
+      code: "unauthenticated_service",
+      message: "invalid build worker token",
+      retryable: false,
+    });
+    return;
+  }
+  let command;
+  try {
+    command = await readJson(req);
+    send(res, 200, await handleCommand(command));
+  } catch (error) {
+    send(res, 400, {
+      id: `failed-${command?.requestId || "unknown"}`,
+      requestId: command?.requestId || "unknown",
+      type: command?.type || "GetBuildStatus",
+      status: "failed",
+      error: {
+        code: "invalid_input",
+        message: error instanceof Error ? error.message : "invalid request",
+        retryable: false,
+      },
+      completedAt: new Date().toISOString(),
+    });
+  }
+});
+
+server.listen(socketPath, async () => {
+  await chmod(socketPath, socketMode);
+  console.log(`incus-web build worker listening on ${socketPath}`);
+});
+
+async function handleCommand(command) {
+  const invalid = validateCommand(command);
+  if (invalid) return operation(command, "failed", invalid);
+  try {
+    switch (command.type) {
+      case "DispatchBuildImage":
+        return operation(command, "succeeded", await dispatchBuild(command));
+      case "GetBuildStatus":
+        return operation(command, "succeeded", getBuildStatus(command));
+      case "ListBuildImages":
+        return operation(command, "succeeded", listImages(command));
+      case "SetBuildImageMaster":
+        return operation(command, "succeeded", setMaster(command));
+      case "ListBuildPresets":
+        return operation(command, "succeeded", listPresets(command));
+      case "SaveBuildPreset":
+        return operation(command, "succeeded", savePreset(command));
+      default:
+        return operation(command, "failed", error("invalid_input", "unsupported command"));
+    }
+  } catch (err) {
+    return operation(
+      command,
+      "failed",
+      error(err?.code || "operation_failed", err instanceof Error ? err.message : "operation failed"),
+    );
+  }
+}
+
+async function dispatchBuild(command) {
+  const existing = db
+    .prepare("SELECT id FROM builds WHERE owner_user_id = ? AND idempotency_key = ?")
+    .get(command.actor.userId, command.payload.idempotencyKey);
+  if (existing) return { buildId: existing.id };
+
+  const buildId = `build_${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO builds
+      (id, owner_user_id, idempotency_key, status, image_alias, distro, release, based_on, definition_yaml, created_at)
+      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    buildId,
+    command.actor.userId,
+    command.payload.idempotencyKey,
+    command.payload.imageAlias,
+    command.payload.distro,
+    command.payload.release,
+    command.payload.basedOn || null,
+    command.payload.definitionYaml,
+    now,
+  );
+
+  void runBuild(buildId).catch((err) => {
+    failBuild(buildId, err instanceof Error ? err.message : String(err));
+  });
+
+  return { buildId };
+}
+
+function getBuildStatus(command) {
+  const row = db
+    .prepare("SELECT * FROM builds WHERE id = ? AND owner_user_id = ?")
+    .get(command.payload.buildId, command.actor.userId);
+  if (!row) throw Object.assign(new Error("build not found"), { code: "not_found" });
+  const log = readLogSince(row.id, command.payload.logOffset);
+  return {
+    buildId: row.id,
+    status: row.status,
+    imageAlias: row.image_alias,
+    logOffset: log.offset,
+    logChunk: log.chunk,
+    error: row.error || undefined,
+    startedAt: row.started_at || undefined,
+    completedAt: row.completed_at || undefined,
+  };
+}
+
+function listImages(command) {
+  const rows = db
+    .prepare("SELECT * FROM image_registry WHERE owner_user_id = ? ORDER BY created_at DESC")
+    .all(command.actor.userId);
+  return {
+    images: rows.map((row) => ({
+      imageAlias: row.image_alias,
+      ownerUserId: row.owner_user_id,
+      buildId: row.build_id,
+      distro: row.distro,
+      release: row.release,
+      basedOn: row.based_on || undefined,
+      isMaster: row.is_master === 1,
+      createdAt: row.created_at,
+    })),
+  };
+}
+
+function setMaster(command) {
+  const image = db
+    .prepare("SELECT image_alias FROM image_registry WHERE owner_user_id = ? AND image_alias = ?")
+    .get(command.actor.userId, command.payload.imageAlias);
+  if (!image) throw Object.assign(new Error("image not found"), { code: "not_found" });
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE image_registry SET is_master = 0 WHERE owner_user_id = ?").run(command.actor.userId);
+    db.prepare("UPDATE image_registry SET is_master = 1 WHERE owner_user_id = ? AND image_alias = ?").run(
+      command.actor.userId,
+      command.payload.imageAlias,
+    );
+  });
+  tx();
+  return { imageAlias: command.payload.imageAlias };
+}
+
+function listPresets(command) {
+  const rows = db
+    .prepare("SELECT * FROM build_presets WHERE owner_user_id = ? ORDER BY updated_at DESC")
+    .all(command.actor.userId);
+  return {
+    presets: rows.map((row) => ({
+      id: row.id,
+      ownerUserId: row.owner_user_id,
+      name: row.name,
+      distro: row.distro,
+      release: row.release,
+      packages: JSON.parse(row.packages_json),
+      postInstallCommands: JSON.parse(row.post_install_json),
+      updatedAt: row.updated_at,
+    })),
+  };
+}
+
+function savePreset(command) {
+  const now = new Date().toISOString();
+  const existing = db
+    .prepare("SELECT id FROM build_presets WHERE owner_user_id = ? AND name = ?")
+    .get(command.actor.userId, command.payload.name);
+  const id = existing?.id || `preset_${randomUUID()}`;
+  db.prepare(
+    `INSERT INTO build_presets
+      (id, owner_user_id, name, distro, release, packages_json, post_install_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_user_id, name) DO UPDATE SET
+        distro = excluded.distro,
+        release = excluded.release,
+        packages_json = excluded.packages_json,
+        post_install_json = excluded.post_install_json,
+        updated_at = excluded.updated_at`,
+  ).run(
+    id,
+    command.actor.userId,
+    command.payload.name,
+    command.payload.distro,
+    command.payload.release,
+    JSON.stringify(command.payload.packages),
+    JSON.stringify(command.payload.postInstallCommands),
+    now,
+  );
+  return {
+    preset: {
+      id,
+      ownerUserId: command.actor.userId,
+      name: command.payload.name,
+      distro: command.payload.distro,
+      release: command.payload.release,
+      packages: command.payload.packages,
+      postInstallCommands: command.payload.postInstallCommands,
+      updatedAt: now,
+    },
+  };
+}
+
+async function runBuild(buildId) {
+  const row = db.prepare("SELECT * FROM builds WHERE id = ?").get(buildId);
+  if (!row) return;
+  updateBuild(buildId, "running", { startedAt: new Date().toISOString() });
+  appendLog(buildId, "running preflight checks\n");
+  await preflight();
+  await acquireLock();
+  const dir = await mkdtemp(join(tmpdir(), "incus-web-build-"));
+  try {
+    const definitionPath = join(dir, "definition.yaml");
+    await writeFile(definitionPath, row.definition_yaml, { mode: 0o600 });
+    appendLog(buildId, `starting distrobuilder for ${row.image_alias}\n`);
+    await run(distrobuilderBin, [
+      "build-incus",
+      definitionPath,
+      dir,
+      "--type",
+      "unified",
+      `--import-into-incus=${row.image_alias}`,
+    ], (text) => appendLog(buildId, text));
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      updateBuild(buildId, "succeeded", { completedAt: now });
+      db.prepare(
+        `INSERT OR REPLACE INTO image_registry
+          (image_alias, owner_user_id, build_id, distro, release, based_on, is_master, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT is_master FROM image_registry WHERE image_alias = ?), 0), ?)`,
+      ).run(row.image_alias, row.owner_user_id, row.id, row.distro, row.release, row.based_on, row.image_alias, now);
+    });
+    tx();
+    appendLog(buildId, `build succeeded: ${row.image_alias}\n`);
+  } finally {
+    await releaseLock();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function preflight() {
+  await run("sh", ["-lc", [
+    "set -e",
+    "ldd --version >/dev/null 2>&1",
+    "test -f /sys/fs/cgroup/cgroup.controllers",
+    "command -v newuidmap >/dev/null 2>&1",
+    "command -v newgidmap >/dev/null 2>&1",
+    "command -v nft >/dev/null 2>&1",
+    "command -v unsquashfs >/dev/null 2>&1",
+    `command -v ${shellWord(distrobuilderBin)} >/dev/null 2>&1`,
+  ].join("\n")]);
+}
+
+function updateBuild(buildId, status, { startedAt, completedAt, error: errorText } = {}) {
+  db.prepare(
+    `UPDATE builds SET
+      status = ?,
+      started_at = COALESCE(?, started_at),
+      completed_at = COALESCE(?, completed_at),
+      error = COALESCE(?, error)
+      WHERE id = ?`,
+  ).run(status, startedAt || null, completedAt || null, errorText || null, buildId);
+}
+
+function failBuild(buildId, message) {
+  updateBuild(buildId, "failed", { completedAt: new Date().toISOString(), error: message });
+  appendLog(buildId, `build failed: ${message}\n`);
+}
+
+function appendLog(buildId, text) {
+  if (!text) return;
+  const last = db
+    .prepare("SELECT offset, length(chunk) AS size FROM build_logs WHERE build_id = ? ORDER BY offset DESC LIMIT 1")
+    .get(buildId);
+  const offset = last ? last.offset + last.size : 0;
+  db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
+    buildId,
+    offset,
+    text,
+    new Date().toISOString(),
+  );
+}
+
+function readLogSince(buildId, since) {
+  const rows = db
+    .prepare("SELECT offset, chunk FROM build_logs WHERE build_id = ? AND offset + length(chunk) > ? ORDER BY offset ASC")
+    .all(buildId, since);
+  let chunk = "";
+  let offset = since;
+  for (const row of rows) {
+    const start = Math.max(0, since - row.offset);
+    const part = row.chunk.slice(start);
+    chunk += part;
+    offset = row.offset + row.chunk.length;
+  }
+  return { chunk, offset };
+}
+
+function run(command, args, onOutput = () => {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      kill(child, "SIGTERM");
+      setTimeout(() => kill(child, "SIGKILL"), 1000).unref();
+      reject(new Error(`${command} timed out`));
+    }, commandTimeoutMs);
+    timer.unref();
+    child.stdout.on("data", (data) => onOutput(data.toString()));
+    child.stderr.on("data", (data) => {
+      const text = data.toString();
+      stderr += text;
+      onOutput(text);
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `${command} exited ${code}`));
+    });
+  });
+}
+
+async function acquireLock() {
+  try {
+    await symlink(String(process.pid), lockPath);
+  } catch {
+    throw new Error("another image build is already running");
+  }
+}
+
+async function releaseLock() {
+  await unlink(lockPath).catch(() => {});
+}
+
+function validateCommand(command) {
+  if (!command || typeof command !== "object") return error("invalid_input", "command must be an object");
+  if (command.version !== "build-worker.v1") return error("invalid_input", "unsupported build worker version");
+  if (!command.actor || typeof command.actor.userId !== "string" || typeof command.actor.email !== "string") {
+    return error("invalid_input", "actor is invalid");
+  }
+  if (!command.payload || typeof command.payload !== "object") return error("invalid_input", "payload is invalid");
+  const payload = command.payload;
+  if (command.type === "DispatchBuildImage") {
+    if (
+      !validAlias(payload.imageAlias) ||
+      !string(payload.definitionYaml, 200000) ||
+      !string(payload.idempotencyKey, 160) ||
+      !Array.isArray(payload.packages) ||
+      !Array.isArray(payload.postInstallCommands)
+    ) {
+      return error("invalid_input", "DispatchBuildImage payload is invalid");
+    }
+  }
+  if (command.type === "GetBuildStatus" && (!string(payload.buildId, 80) || !Number.isInteger(payload.logOffset))) {
+    return error("invalid_input", "GetBuildStatus payload is invalid");
+  }
+  return undefined;
+}
+
+function validAlias(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,118}$/.test(value);
+}
+
+function string(value, max) {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function operation(command, status, resultOrError) {
+  const completedAt = new Date().toISOString();
+  const base = {
+    id: `build-worker-${command?.requestId || "unknown"}-${Date.now()}`,
+    requestId: command?.requestId || "unknown",
+    type: command?.type || "GetBuildStatus",
+    status,
+    completedAt,
+  };
+  return status === "succeeded"
+    ? { ...base, result: resultOrError }
+    : { ...base, error: resultOrError };
+}
+
+function error(code, message, retryable = false) {
+  return { code, message, retryable };
+}
+
+async function readJson(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > maxBodyBytes) throw new Error("request too large");
+  }
+  return JSON.parse(body || "{}");
+}
+
+function send(res, status, body) {
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.end(JSON.stringify(body));
+}
+
+async function unlinkExistingSocket(path) {
+  try {
+    if (await socketAcceptsConnections(path)) {
+      console.error(`${path} is already accepting connections`);
+      process.exit(1);
+    }
+    await unlink(path);
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+  }
+}
+
+function socketAcceptsConnections(path) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(path);
+    socket.once("connect", () => {
+      socket.end();
+      resolve(true);
+    });
+    socket.once("error", (err) => {
+      if (err.code === "ECONNREFUSED" || err.code === "ENOENT") resolve(false);
+      else reject(err);
+    });
+  });
+}
+
+async function loadSQLite() {
+  try {
+    return await import("node:sqlite");
+  } catch {
+    console.error("incus-web build worker requires Node.js with node:sqlite support (Node.js 22.5+).");
+    process.exit(1);
+  }
+}
+
+function kill(child, signal) {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+function shellWord(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}

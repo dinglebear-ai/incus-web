@@ -8,6 +8,7 @@ import {
   getWorkspaceRefForActor,
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
+import { recordWorkspaceActivity } from "@/lib/workspaces/activity";
 import {
   jsonError,
   provisionerError,
@@ -59,6 +60,7 @@ export async function POST(request: Request, context: RouteContext) {
           });
 
   if (operation.status !== "succeeded") {
+    recordWorkspaceActivity(workspaceId, actor, body.action, "failed");
     return Response.json(
       {
         ok: false,
@@ -68,6 +70,7 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
+  recordWorkspaceActivity(workspaceId, actor, body.action, "succeeded");
   return Response.json({
     ok: true,
     operation,
