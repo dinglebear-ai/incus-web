@@ -2,20 +2,16 @@
 
 import {
   BoxesIcon,
-  CameraIcon,
   CheckCircle2Icon,
   CircleGaugeIcon,
   DatabaseIcon,
   FingerprintIcon,
   FolderGit2Icon,
   GitBranchIcon,
-  KeyRoundIcon,
   SlidersHorizontalIcon,
   ShieldCheckIcon,
   SignalIcon,
-  Share2Icon,
   TerminalIcon,
-  UploadIcon,
   UserRoundIcon,
   XIcon,
 } from "lucide-react";
@@ -255,10 +251,9 @@ function WorkspaceFeatures({ workspace }: { workspace: Workspace }) {
   return (
     <section>
       <div className="mb-2 flex items-center justify-between gap-3">
-        <SectionLabel icon={SlidersHorizontalIcon}>Workspace features</SectionLabel>
-        <span className="aurora-text-meta">Prototype capability map</span>
+        <SectionLabel icon={SlidersHorizontalIcon}>Workspace access</SectionLabel>
       </div>
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-2 md:grid-cols-2">
         <WorkspaceFeature
           icon={TerminalIcon}
           label="Terminal"
@@ -268,38 +263,11 @@ function WorkspaceFeatures({ workspace }: { workspace: Workspace }) {
           tone={workspace.terminalUrl ? "success" : "warn"}
         />
         <WorkspaceFeature
-          icon={Share2Icon}
-          label="Sharing"
-          value="private"
-          detail="No user or org grants by default"
-          tone="success"
-        />
-        <WorkspaceFeature
-          icon={CameraIcon}
-          label="Snapshots"
-          value="none"
-          detail="ZFS clone path for fast workspace copies"
-        />
-        <WorkspaceFeature
           icon={GitBranchIcon}
           label="Dotfiles"
           value={workspace.setup.dotfilesStatus}
           detail="Installed during setup; drift is user state"
           tone={workspace.setup.dotfilesStatus === "ok" ? "success" : "warn"}
-        />
-        <WorkspaceFeature
-          icon={UploadIcon}
-          label="MCP import"
-          value="ready"
-          detail="Browser import flow for user config files"
-          tone="rose"
-        />
-        <WorkspaceFeature
-          icon={KeyRoundIcon}
-          label="Secrets"
-          value="age"
-          detail="Age key upload must be encrypted at rest"
-          tone="warn"
         />
       </div>
     </section>
