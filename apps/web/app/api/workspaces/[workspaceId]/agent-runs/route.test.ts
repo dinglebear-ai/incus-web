@@ -49,6 +49,36 @@ describe("agent-runs route", () => {
     expect(sendWorkspaceCommand).not.toHaveBeenCalled();
   });
 
+  it("rejects limit values above the maximum before calling the provisioner", async () => {
+    const response = await GET(
+      new Request("http://localhost/api?limit=101"),
+      { params: Promise.resolve({ workspaceId: workspace.id }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(sendWorkspaceCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects limit values below the minimum before calling the provisioner", async () => {
+    const response = await GET(
+      new Request("http://localhost/api?limit=0"),
+      { params: Promise.resolve({ workspaceId: workspace.id }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(sendWorkspaceCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-numeric limit values before calling the provisioner", async () => {
+    const response = await GET(
+      new Request("http://localhost/api?limit=abc"),
+      { params: Promise.resolve({ workspaceId: workspace.id }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(sendWorkspaceCommand).not.toHaveBeenCalled();
+  });
+
   it("rejects workspace mismatches", async () => {
     const response = await GET(new Request("http://localhost/api"), {
       params: Promise.resolve({ workspaceId: "other-workspace" }),

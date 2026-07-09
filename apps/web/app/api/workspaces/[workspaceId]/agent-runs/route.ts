@@ -135,9 +135,8 @@ function normalizeDispatchPayload(
 
 function limitFromUrl(url: string) {
   const raw = new URL(url).searchParams.get("limit");
-  const parsed = raw ? Number(raw) : 20;
-  if (!Number.isInteger(parsed)) return 20;
-  return Math.min(100, Math.max(1, parsed));
+  if (raw === null) return 20;
+  return Number(raw);
 }
 
 function jsonError(code: string, message: string, status: number) {
