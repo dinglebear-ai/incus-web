@@ -36,6 +36,14 @@ const inventory: WorkspaceInventory = {
         memory: "96 MiB / 4 GiB",
         storage: "5 GiB / 20 GiB",
       },
+      metrics: {
+        cpuCount: 2,
+        memoryUsedBytes: 96 * 1024 * 1024,
+        memoryLimitBytes: 4 * 1024 * 1024 * 1024,
+        rootDiskUsedBytes: 5 * 1024 * 1024 * 1024,
+        rootDiskLimitBytes: 20 * 1024 * 1024 * 1024,
+        loadAverage: [0.12, 0.2, 0.18],
+      },
       setup: {
         phase: "ready",
         dotfilesStatus: "ok",

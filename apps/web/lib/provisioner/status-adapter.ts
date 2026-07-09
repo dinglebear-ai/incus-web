@@ -83,6 +83,14 @@ export function statusToWorkspace(
         empty: "host quota pending",
       }),
     },
+    metrics: {
+      cpuCount: status.cpuCount,
+      memoryUsedBytes: status.memoryUsedBytes,
+      memoryLimitBytes: status.memoryLimitBytes,
+      rootDiskUsedBytes: status.rootDiskUsedBytes,
+      rootDiskLimitBytes: status.rootDiskLimitBytes,
+      loadAverage: status.loadAverage,
+    },
     setup: setupSummary(status),
     terminalUrl: optionalUrlEnv("INCUS_WEB_TERMINAL_URL"),
     accessNote:

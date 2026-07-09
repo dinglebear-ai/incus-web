@@ -8,6 +8,11 @@ import {
   getWorkspaceRefForActor,
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
+import {
+  jsonError,
+  provisionerError,
+  statusForProvisionerError,
+} from "@/lib/workspaces/route-helpers";
 
 type WorkspaceAction = "start" | "stop" | "restart";
 
@@ -86,50 +91,6 @@ async function readActionBody(
 
 function isWorkspaceAction(value: unknown): value is WorkspaceAction {
   return value === "start" || value === "stop" || value === "restart";
-}
-
-function jsonError(code: string, message: string, status: number) {
-  return Response.json(
-    {
-      ok: false,
-      error: {
-        code,
-        message,
-      },
-    },
-    { status },
-  );
-}
-
-function provisionerError(error: {
-  code: string;
-  message: string;
-  retryable: boolean;
-}) {
-  return Response.json(
-    {
-      ok: false,
-      error,
-    },
-    { status: statusForProvisionerError(error) },
-  );
-}
-
-function statusForProvisionerError(
-  error: { code: string; retryable: boolean } | undefined,
-) {
-  if (!error) return 409;
-  if (error.retryable) return 503;
-  if (
-    error.code === "unauthenticated_service" ||
-    error.code === "mutation_not_authorized"
-  ) {
-    return 403;
-  }
-  if (error.code === "invalid_input" || error.code === "metadata_mismatch") {
-    return 400;
-  }
-  return 409;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
