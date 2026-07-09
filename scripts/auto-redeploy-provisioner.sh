@@ -5,6 +5,7 @@ REPO_DIR="${INCUS_WEB_REPO_DIR:-/home/jmagar/workspace/incus-web}"
 BRANCH="main"
 PROVISIONER_INSTALL_PATH="${INCUS_WEB_PROVISIONER_INSTALL_PATH:-/usr/local/lib/incus-web/provisioner-server.mjs}"
 AGENT_RUNS_INSTALL_PATH="${INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH:-/usr/local/lib/incus-web/agent-runs.mjs}"
+SERVICE_AUTH_INSTALL_PATH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH:-/usr/local/lib/incus-web/service-auth.mjs}"
 AGENT_RUN_STORE_PATH="${INCUS_WEB_AGENT_RUN_STORE_PATH:-/var/lib/incus-web/agent-runs.json}"
 SERVICE_NAME="incus-web-provisioner.service"
 # Marks that files were synced but the restart was deferred because a run
@@ -75,6 +76,16 @@ fi
 if ! cmp -s scripts/agent-runs.mjs "$AGENT_RUNS_INSTALL_PATH" 2>/dev/null; then
   log "syncing scripts/agent-runs.mjs -> $AGENT_RUNS_INSTALL_PATH"
   sudo install -m 644 scripts/agent-runs.mjs "$AGENT_RUNS_INSTALL_PATH"
+  changed=1
+fi
+
+# provisioner-server.mjs imports this by relative path -- if it's ever
+# missing (fresh host, a directory that got wiped and only partially
+# restored) the service crash-loops with ERR_MODULE_NOT_FOUND instead of
+# just picking up a stale copy, so it's synced the same as the other two.
+if ! cmp -s scripts/service-auth.mjs "$SERVICE_AUTH_INSTALL_PATH" 2>/dev/null; then
+  log "syncing scripts/service-auth.mjs -> $SERVICE_AUTH_INSTALL_PATH"
+  sudo install -m 644 scripts/service-auth.mjs "$SERVICE_AUTH_INSTALL_PATH"
   changed=1
 fi
 
