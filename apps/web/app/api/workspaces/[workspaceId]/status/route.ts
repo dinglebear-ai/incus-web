@@ -81,7 +81,21 @@ export async function GET(_request: Request, context: RouteContext) {
   }
 
   const workspace = statusToWorkspace(operation.result, access.workspace.ownerUserId);
-  const history = appendTelemetrySample(workspaceId, workspace);
+  let history;
+  try {
+    history = appendTelemetrySample(workspaceId, workspace);
+  } catch (error) {
+    return Response.json(
+      {
+        ok: false,
+        error: {
+          code: "workspace_state_unavailable",
+          message: error instanceof Error ? error.message : "workspace state database unavailable",
+        },
+      },
+      { status: 503 },
+    );
+  }
   return Response.json({ ok: true, workspace, history });
 }
 

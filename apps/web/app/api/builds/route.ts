@@ -1,23 +1,21 @@
-import { headers } from "next/headers";
 import { createHash } from "node:crypto";
 
-import { BUILD_WORKER_CONTRACT_VERSION, type BuildWorkerCommand } from "@/lib/build-worker/contracts";
 import { sendBuildWorkerCommand } from "@/lib/build-worker/client";
+import { buildWorkerCommand, buildWorkerRouteActor } from "@/lib/build-worker/route-helpers";
 import { renderDistrobuilderYaml } from "@/lib/builder/render-definition";
-import { AuthenticationRequiredError, getActorFromHeaders } from "@/lib/auth/identity";
 import { jsonError } from "@/lib/workspaces/route-helpers";
 
 export async function GET() {
-  const actor = await routeActor();
+  const actor = await buildWorkerRouteActor();
   if (!actor.ok) return actor.response;
 
-  const images = await sendBuildWorkerCommand(command("ListBuildImages", actor.actor, {}));
-  const presets = await sendBuildWorkerCommand(command("ListBuildPresets", actor.actor, {}));
+  const images = await sendBuildWorkerCommand(buildWorkerCommand("ListBuildImages", actor.actor, {}));
+  const presets = await sendBuildWorkerCommand(buildWorkerCommand("ListBuildPresets", actor.actor, {}));
   return Response.json({ ok: images.status === "succeeded" && presets.status === "succeeded", images, presets });
 }
 
 export async function POST(request: Request) {
-  const actor = await routeActor();
+  const actor = await buildWorkerRouteActor();
   if (!actor.ok) return actor.response;
 
   const body = await request.json().catch(() => undefined);
@@ -36,7 +34,7 @@ export async function POST(request: Request) {
     const parsed = dispatchPayload(body);
     if (!parsed.ok) return jsonError("invalid_build", parsed.message, 400);
     const operation = await sendBuildWorkerCommand(
-      command("DispatchBuildImage", actor.actor, {
+      buildWorkerCommand("DispatchBuildImage", actor.actor, {
         ...parsed.value,
         definitionYaml: parsed.definitionYaml,
         imageAlias: imageAliasForActor(actor.actor, parsed.requestedAlias),
@@ -49,7 +47,7 @@ export async function POST(request: Request) {
 
   if (action === "savePreset") {
     const operation = await sendBuildWorkerCommand(
-      command("SaveBuildPreset", actor.actor, {
+      buildWorkerCommand("SaveBuildPreset", actor.actor, {
         name: stringField(body.name, "Preset"),
         distro: stringField(body.distro, "debian"),
         release: stringField(body.release, "trixie"),
@@ -64,41 +62,12 @@ export async function POST(request: Request) {
     const imageAlias = stringField(body.imageAlias, "");
     if (!imageAlias) return jsonError("invalid_image", "imageAlias is required", 400);
     const operation = await sendBuildWorkerCommand(
-      command("SetBuildImageMaster", actor.actor, { imageAlias }),
+      buildWorkerCommand("SetBuildImageMaster", actor.actor, { imageAlias }),
     );
     return Response.json({ ok: operation.status === "succeeded", operation });
   }
 
   return jsonError("invalid_action", "unsupported build action", 400);
-}
-
-function command<TType extends BuildWorkerCommand["type"]>(
-  type: TType,
-  actor: { userId: string; email: string; displayName?: string; requestId: string },
-  payload: Extract<BuildWorkerCommand, { type: TType }>["payload"],
-): Extract<BuildWorkerCommand, { type: TType }> {
-  return {
-    version: BUILD_WORKER_CONTRACT_VERSION,
-    requestId: actor.requestId,
-    type,
-    actor: {
-      userId: actor.userId,
-      email: actor.email,
-      displayName: actor.displayName,
-    },
-    payload,
-  } as Extract<BuildWorkerCommand, { type: TType }>;
-}
-
-async function routeActor() {
-  try {
-    return { ok: true as const, actor: getActorFromHeaders(await headers()) };
-  } catch (error) {
-    if (error instanceof AuthenticationRequiredError) {
-      return { ok: false as const, response: jsonError("authentication_required", error.message, 401) };
-    }
-    throw error;
-  }
 }
 
 function dispatchPayload(body: Record<string, unknown>) {

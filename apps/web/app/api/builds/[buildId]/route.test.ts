@@ -47,4 +47,16 @@ describe("build status route", () => {
       }),
     );
   });
+
+  it("floors decimal log offsets", async () => {
+    await GET(new Request("http://localhost/api/builds/build_1?offset=12.9"), {
+      params: Promise.resolve({ buildId: "build_1" }),
+    });
+
+    expect(sendBuildWorkerCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { buildId: "build_1", logOffset: 12 },
+      }),
+    );
+  });
 });

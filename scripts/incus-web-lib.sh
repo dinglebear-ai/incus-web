@@ -559,6 +559,10 @@ ensure_host_node() {
 }
 
 validate_host_node_version() {
+  if [[ -n "${INCUS_WEB_WORKSPACE_STATE_DB:-}" || -n "${INCUS_WEB_WORKSPACE_STATE_DB_PATH:-}" ]]; then
+    validate_node_min_version 22 5 "host web app requires Node.js >=22.5.0 for persistent workspace state via node:sqlite"
+    return
+  fi
   validate_node_min_version 20 9 "host web app requires Node.js >=20.9.0 for Next.js 16"
 }
 

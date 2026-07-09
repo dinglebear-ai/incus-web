@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -62,6 +66,21 @@ function successfulOperation(
 }
 
 describe("provisioner contract validators", () => {
+  it("keeps host provisioner boundary constants aligned", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const serverSource = readFileSync(join(here, "../../../../scripts/provisioner-server.mjs"), "utf8");
+    const contractSource = readFileSync(join(here, "contracts.ts"), "utf8");
+
+    expect(readRegexConst(serverSource, "CPU_LIMIT_PATTERN")).toBe(readRegexConst(contractSource, "CPU_LIMIT_PATTERN"));
+    expect(readRegexConst(serverSource, "MEMORY_LIMIT_PATTERN")).toBe(
+      readRegexConst(contractSource, "MEMORY_LIMIT_PATTERN"),
+    );
+    expect(readStringArrayConst(serverSource, "LIMIT_PAYLOAD_KEYS")).toEqual(["cpu", "memory"]);
+    expect(readStringArrayConst(serverSource, "MOUNT_PAYLOAD_KEYS")).toEqual(["hostPath"]);
+    expect(readStringArrayConst(serverSource, "SNAPSHOT_PAYLOAD_KEYS")).toEqual(["name"]);
+    expect(readStringArrayConst(serverSource, "GOLDEN_CONFIG_PAYLOAD_KEYS")).toEqual(["sha256Hex"]);
+  });
+
   it("accepts a valid provisioner command envelope", () => {
     const result = validateProvisionerCommand(baseCommand);
 
@@ -1163,3 +1182,15 @@ describe("provisioner contract validators", () => {
     });
   });
 });
+
+function readRegexConst(source: string, name: string) {
+  const match = source.match(new RegExp(`const ${name} = (/.+/[a-z]*);`));
+  if (!match) throw new Error(`missing ${name}`);
+  return match[1];
+}
+
+function readStringArrayConst(source: string, name: string) {
+  const match = source.match(new RegExp(`const ${name} = \\[([^\\]]*)\\];`));
+  if (!match) throw new Error(`missing ${name}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}

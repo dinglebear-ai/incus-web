@@ -116,6 +116,7 @@ db.exec(`
     UNIQUE(owner_user_id, name)
   );
 `);
+recoverInterruptedBuilds();
 
 const server = createServer(async (req, res) => {
   if (req.url === "/healthz") {
@@ -168,6 +169,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(socketPath, async () => {
   await chmod(socketPath, socketMode);
+  processNextBuild();
   console.log(`incus-web build worker listening on ${socketPath}`);
 });
 
@@ -270,14 +272,13 @@ function setMaster(command) {
     .prepare("SELECT image_alias FROM image_registry WHERE owner_user_id = ? AND image_alias = ?")
     .get(command.actor.userId, command.payload.imageAlias);
   if (!image) throw Object.assign(new Error("image not found"), { code: "not_found" });
-  const tx = db.transaction(() => {
+  runTransaction(() => {
     db.prepare("UPDATE image_registry SET is_master = 0 WHERE owner_user_id = ?").run(command.actor.userId);
     db.prepare("UPDATE image_registry SET is_master = 1 WHERE owner_user_id = ? AND image_alias = ?").run(
       command.actor.userId,
       command.payload.imageAlias,
     );
   });
-  tx();
   return { imageAlias: command.payload.imageAlias };
 }
 
@@ -360,7 +361,7 @@ async function runBuild(buildId) {
       `--import-into-incus=${row.image_alias}`,
     ], (text) => appendLog(buildId, text));
     const now = new Date().toISOString();
-    const tx = db.transaction(() => {
+    runTransaction(() => {
       updateBuild(buildId, "succeeded", { completedAt: now });
       db.prepare(
         `INSERT OR REPLACE INTO image_registry
@@ -368,7 +369,6 @@ async function runBuild(buildId) {
           VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT is_master FROM image_registry WHERE image_alias = ?), 0), ?)`,
       ).run(row.image_alias, row.owner_user_id, row.id, row.distro, row.release, row.based_on, row.image_alias, now);
     });
-    tx();
     appendLog(buildId, `build succeeded: ${row.image_alias}\n`);
     pruneCompletedBuilds();
   } finally {
@@ -434,9 +434,9 @@ function failBuild(buildId, message) {
 function appendLog(buildId, text) {
   if (!text) return;
   const last = db
-    .prepare("SELECT offset, length(chunk) AS size FROM build_logs WHERE build_id = ? ORDER BY offset DESC LIMIT 1")
+    .prepare("SELECT offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset DESC LIMIT 1")
     .get(buildId);
-  const offset = last ? last.offset + last.size : 0;
+  const offset = last ? Number(last.offset) + byteLength(String(last.chunk)) : 0;
   db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
     buildId,
     offset,
@@ -448,37 +448,41 @@ function appendLog(buildId, text) {
 
 function readLogSince(buildId, since) {
   const rows = db
-    .prepare("SELECT offset, chunk FROM build_logs WHERE build_id = ? AND offset + length(chunk) > ? ORDER BY offset ASC")
-    .all(buildId, since);
+    .prepare("SELECT offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
+    .all(buildId);
   let chunk = "";
   let offset = since;
   for (const row of rows) {
-    const start = Math.max(0, since - row.offset);
-    const part = row.chunk.slice(start);
+    const rowOffset = Number(row.offset);
+    const rowChunk = String(row.chunk);
+    const rowSize = byteLength(rowChunk);
+    if (rowOffset + rowSize <= since) continue;
+    const start = Math.max(0, since - rowOffset);
+    const part = sliceUtf8FromByte(rowChunk, start);
     const remaining = maxLogChunkBytes - Buffer.byteLength(chunk, "utf8");
     if (remaining <= 0) break;
     if (Buffer.byteLength(part, "utf8") > remaining) {
       const clipped = clipUtf8(part, remaining);
       chunk += clipped;
-      offset = row.offset + start + clipped.length;
+      offset = rowOffset + start + byteLength(clipped);
       break;
     }
     chunk += part;
-    offset = row.offset + row.chunk.length;
+    offset = rowOffset + rowSize;
   }
   return { chunk, offset };
 }
 
 function pruneBuildLogs(buildId) {
   const rows = db
-    .prepare("SELECT rowid, offset, length(chunk) AS size FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
+    .prepare("SELECT rowid, offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
     .all(buildId);
-  let total = rows.reduce((sum, row) => sum + Number(row.size || 0), 0);
+  let total = rows.reduce((sum, row) => sum + byteLength(String(row.chunk)), 0);
   let removed = 0;
   for (const row of rows) {
     if (total <= maxLogBytesPerBuild) break;
     db.prepare("DELETE FROM build_logs WHERE rowid = ?").run(row.rowid);
-    total -= Number(row.size || 0);
+    total -= byteLength(String(row.chunk));
     removed += 1;
   }
   if (removed > 0) {
@@ -487,7 +491,7 @@ function pruneBuildLogs(buildId) {
       .get(buildId);
     if (first && !hasTruncationMarker(buildId)) {
       const marker = `[log truncated to last ${maxLogBytesPerBuild} bytes]\n`;
-      const markerOffset = Math.max(0, Number(first.offset) - marker.length);
+      const markerOffset = Math.max(0, Number(first.offset) - byteLength(marker));
       db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
         buildId,
         markerOffset,
@@ -496,6 +500,20 @@ function pruneBuildLogs(buildId) {
       );
     }
   }
+}
+
+function recoverInterruptedBuilds() {
+  const rows = db.prepare("SELECT id FROM builds WHERE status = 'running' ORDER BY started_at ASC").all();
+  const now = new Date().toISOString();
+  runTransaction(() => {
+    for (const row of rows) {
+      updateBuild(row.id, "failed", {
+        completedAt: now,
+        error: "build worker restarted before completion",
+      });
+      appendLog(row.id, "build failed: build worker restarted before completion\n");
+    }
+  });
 }
 
 function hasTruncationMarker(buildId) {
@@ -516,13 +534,12 @@ function pruneCompletedBuilds() {
        LIMIT -1 OFFSET ?`,
     )
     .all(maxCompletedBuilds);
-  const tx = db.transaction(() => {
+  runTransaction(() => {
     for (const row of rows) {
       db.prepare("DELETE FROM build_logs WHERE build_id = ?").run(row.id);
       db.prepare("DELETE FROM builds WHERE id = ?").run(row.id);
     }
   });
-  tx();
 }
 
 function clipUtf8(text, maxBytes) {
@@ -532,6 +549,27 @@ function clipUtf8(text, maxBytes) {
     clipped = clipped.slice(0, -1);
   }
   return clipped;
+}
+
+function sliceUtf8FromByte(text, byteOffset) {
+  if (byteOffset <= 0) return text;
+  return Buffer.from(text, "utf8").subarray(byteOffset).toString("utf8");
+}
+
+function byteLength(text) {
+  return Buffer.byteLength(text, "utf8");
+}
+
+function runTransaction(fn) {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function run(command, args, onOutput = () => {}) {

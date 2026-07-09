@@ -34,6 +34,14 @@ type SQLiteDatabase = {
 
 let db: SQLiteDatabase | undefined;
 let dbUnavailable = false;
+let dbUnavailableError: unknown;
+
+function persistentStateConfigured() {
+  return Boolean(
+    process.env.INCUS_WEB_WORKSPACE_STATE_DB ||
+      process.env.INCUS_WEB_WORKSPACE_STATE_DB_PATH,
+  );
+}
 
 function stateDbPath() {
   return (
@@ -44,7 +52,10 @@ function stateDbPath() {
 }
 
 function database(): SQLiteDatabase | undefined {
-  if (dbUnavailable) return undefined;
+  if (dbUnavailable) {
+    if (persistentStateConfigured()) throw workspaceStateError();
+    return undefined;
+  }
   if (db) return db;
   try {
     const { DatabaseSync } = require("node:" + "sqlite") as {
@@ -81,7 +92,25 @@ function database(): SQLiteDatabase | undefined {
   } catch (error) {
     console.error("workspace state database unavailable", { path: stateDbPath(), error });
     dbUnavailable = true;
+    dbUnavailableError = error;
+    if (persistentStateConfigured()) throw workspaceStateError();
     return undefined;
+  }
+}
+
+export function workspaceStateStoreStatus() {
+  try {
+    const store = database();
+    return store
+      ? { mode: "sqlite" as const, path: stateDbPath(), ok: true as const }
+      : { mode: "memory" as const, path: undefined, ok: true as const };
+  } catch (error) {
+    return {
+      mode: "unavailable" as const,
+      path: stateDbPath(),
+      ok: false as const,
+      message: error instanceof Error ? error.message : "workspace state database unavailable",
+    };
   }
 }
 
@@ -113,6 +142,7 @@ export function recordActivity(entry: WorkspaceActivityEntry) {
       )
       .run(entry.workspaceId, entry.workspaceId, MAX_ACTIVITY_ENTRIES);
   } catch (error) {
+    if (persistentStateConfigured()) throw workspaceStateError(error);
     console.error("workspace activity write failed; using memory fallback", { workspaceId: entry.workspaceId, error });
     recordActivityInMemory(entry);
   }
@@ -141,6 +171,7 @@ export function listActivity(workspaceId: string): WorkspaceActivityEntry[] {
         status: row.status === "failed" ? "failed" : "succeeded",
       }));
   } catch (error) {
+    if (persistentStateConfigured()) throw workspaceStateError(error);
     console.error("workspace activity read failed; using memory fallback", { workspaceId, error });
     return memoryActivity.get(workspaceId) ?? [];
   }
@@ -183,6 +214,7 @@ export function appendTelemetry(
       .run(workspaceId, workspaceId, MAX_TELEMETRY_SAMPLES);
     return listTelemetry(workspaceId);
   } catch (error) {
+    if (persistentStateConfigured()) throw workspaceStateError(error);
     console.error("workspace telemetry write failed; using memory fallback", { workspaceId, error });
     return appendTelemetryInMemory(workspaceId, entry);
   }
@@ -214,9 +246,15 @@ export function listTelemetry(workspaceId: string): WorkspaceTelemetrySample[] {
             : undefined,
       }));
   } catch (error) {
+    if (persistentStateConfigured()) throw workspaceStateError(error);
     console.error("workspace telemetry read failed; using memory fallback", { workspaceId, error });
     return memoryTelemetry.get(workspaceId) ?? [];
   }
+}
+
+function workspaceStateError(cause = dbUnavailableError) {
+  const message = cause instanceof Error ? cause.message : "workspace state database unavailable";
+  return new Error(`workspace state database unavailable: ${message}`);
 }
 
 function recordActivityInMemory(entry: WorkspaceActivityEntry) {

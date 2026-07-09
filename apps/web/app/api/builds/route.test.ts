@@ -72,6 +72,65 @@ describe("builds route", () => {
     );
   });
 
+  it("preserves partial list failures in the response envelope", async () => {
+    sendBuildWorkerCommand
+      .mockResolvedValueOnce({
+        id: "op-images",
+        requestId: "req-images",
+        type: "ListBuildImages",
+        status: "succeeded",
+        result: { images: [] },
+        completedAt: new Date().toISOString(),
+      })
+      .mockResolvedValueOnce({
+        id: "op-presets",
+        requestId: "req-presets",
+        type: "ListBuildPresets",
+        status: "failed",
+        error: { code: "operation_failed", message: "boom", retryable: true },
+        completedAt: new Date().toISOString(),
+      });
+
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(false);
+    expect(body.images.status).toBe("succeeded");
+    expect(body.presets.status).toBe("failed");
+  });
+
+  it("returns ok false when worker dispatch validation fails", async () => {
+    vi.stubEnv("INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS", "test@example.com");
+    sendBuildWorkerCommand.mockResolvedValue({
+      id: "op-1",
+      requestId: "req-test",
+      type: "DispatchBuildImage",
+      status: "failed",
+      error: { code: "invalid_input", message: "bad image", retryable: false },
+      completedAt: new Date().toISOString(),
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/builds", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "dispatch",
+          distro: "debian",
+          release: "trixie",
+          packages: ["git"],
+          postInstallCommands: [],
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(false);
+    expect(body.operation.status).toBe("failed");
+    expect(body.operation.error.message).toBe("bad image");
+  });
+
   it("requires a trusted builder for privileged build actions in production", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("INCUS_WEB_TRUSTED_PROXY_SECRET", "shh");
@@ -96,6 +155,32 @@ describe("builds route", () => {
     );
 
     expect(response.status).toBe(403);
+    expect(sendBuildWorkerCommand).not.toHaveBeenCalled();
+  });
+
+  it("requires a trusted builder for preset and master actions in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("INCUS_WEB_TRUSTED_PROXY_SECRET", "shh");
+    headersMock.mockResolvedValue(
+      new Headers({
+        "x-auth-request-email": "test@example.com",
+        "x-incus-web-proxy-secret": "shh",
+      }),
+    );
+
+    for (const body of [
+      { action: "savePreset", name: "Preset" },
+      { action: "setMaster", imageAlias: "incus-web-test" },
+    ]) {
+      const response = await POST(
+        new Request("http://localhost/api/builds", {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+      );
+
+      expect(response.status).toBe(403);
+    }
     expect(sendBuildWorkerCommand).not.toHaveBeenCalled();
   });
 
