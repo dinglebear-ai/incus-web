@@ -233,6 +233,10 @@ describe("WorkspaceDashboard", () => {
 
     render(<WorkspaceDashboard inventory={inventory} />);
 
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/agent-runs")),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Agent runs" }));
     await screen.findByRole("heading", { name: "Agent runs" }, { timeout: 5000 });
 
     await waitFor(() => {

@@ -13,19 +13,14 @@ import {
   ShieldCheckIcon,
   TerminalIcon,
   UserRoundIcon,
+  XIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
 import { Suspense, lazy, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/aurora/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/aurora/card";
+import { Card } from "@/components/ui/aurora/card";
 import {
   DescriptionItem,
   DescriptionList,
@@ -37,7 +32,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/aurora/tooltip";
-import { StatCard, StatGrid } from "@/components/ui/aurora/stat-card";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
@@ -57,8 +51,6 @@ import type {
   WorkspaceState,
 } from "@/lib/workspaces/types";
 
-const ICON_STORAGE =
-  '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/>';
 const BuilderPanel = dynamic(
   () => import("@/components/builder-panel").then((mod) => mod.BuilderPanel),
   { ssr: false },
@@ -122,17 +114,6 @@ function setupPhaseLabel(phase: SetupPhase) {
   return phase.replaceAll("_", " ");
 }
 
-function metricValue(value: string) {
-  if (value === "unknown" || value.includes("pending")) {
-    return (
-      <span className="aurora-text-section leading-tight text-[var(--aurora-text-muted)]">
-        {value}
-      </span>
-    );
-  }
-  return value;
-}
-
 function SetupCheck({ label, status }: { label: string; status: CheckStatus }) {
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-[var(--aurora-border-default)] px-3 py-2 last:border-b-0">
@@ -175,86 +156,24 @@ function SetupProgressPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
-function WorkspaceFeature({
-  icon: Icon,
-  label,
-  value,
-  detail,
-  tone = "cyan",
-  href,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  detail: string;
-  tone?: "cyan" | "success" | "warn";
-  href?: string;
-}) {
-  const color = featureToneColor(tone);
-  const className =
-    "grid min-h-[82px] grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 text-left";
-  const content = (
-    <>
-      <Icon aria-hidden="true" className="mt-0.5 size-4" style={{ color }} />
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <p className="aurora-text-ui truncate text-[var(--aurora-text-primary)]">
-            {label}
-          </p>
-          <Badge tone={tone === "cyan" ? "info" : tone} shape="tag">
-            {value}
-          </Badge>
-        </div>
-        <p className="aurora-text-meta mt-2">{detail}</p>
-      </div>
-    </>
-  );
-
-  if (href) {
-    return (
-      <a className={className} href={href}>
-        {content}
-      </a>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
-}
-
-function featureToneColor(tone: "cyan" | "success" | "warn") {
-  switch (tone) {
-    case "success":
-      return "var(--aurora-success)";
-    case "warn":
-      return "var(--aurora-warn)";
-    case "cyan":
-      return "var(--aurora-accent-primary)";
-  }
-}
-
-function WorkspaceFeatures({ workspace }: { workspace: Workspace }) {
+function WorkspaceAccessStrip({ workspace }: { workspace: Workspace }) {
   return (
-    <section>
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <SectionLabel icon={SlidersHorizontalIcon}>Workspace access</SectionLabel>
-      </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        <WorkspaceFeature
-          icon={TerminalIcon}
-          label="Terminal"
-          value={workspace.terminalUrl ? "live" : "pending"}
-          detail={workspace.terminalUrl ?? "Route not exposed yet"}
-          href={workspace.terminalUrl}
-          tone={workspace.terminalUrl ? "success" : "warn"}
-        />
-        <WorkspaceFeature
-          icon={GitBranchIcon}
-          label="Dotfiles"
-          value={workspace.setup.dotfilesStatus}
-          detail="Installed during setup; drift is user state"
-          tone={workspace.setup.dotfilesStatus === "ok" ? "success" : "warn"}
-        />
-      </div>
+    <section className="grid gap-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 md:grid-cols-2">
+      <CompactSignal
+        icon={TerminalIcon}
+        label="Terminal"
+        value={workspace.terminalUrl ? workspace.terminalUrl : "Route pending"}
+        badge={workspace.terminalUrl ? "live" : "pending"}
+        tone={workspace.terminalUrl ? "success" : "warn"}
+        href={workspace.terminalUrl}
+      />
+      <CompactSignal
+        icon={GitBranchIcon}
+        label="Dotfiles"
+        value="Setup-managed user state"
+        badge={workspace.setup.dotfilesStatus}
+        tone={workspace.setup.dotfilesStatus === "ok" ? "success" : "warn"}
+      />
     </section>
   );
 }
@@ -325,7 +244,7 @@ function WorkspaceCockpit({
 }) {
   return (
     <section className="min-w-0 max-w-full overflow-hidden rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
-      <div className="grid gap-4 border-b border-[var(--aurora-border-default)] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--aurora-accent-primary)_9%,var(--aurora-panel-strong)),var(--aurora-panel-strong)_42%,var(--aurora-panel-medium))] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <div className="grid gap-3 border-b border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="truncate aurora-text-section text-[var(--aurora-text-primary)]">
@@ -342,6 +261,7 @@ function WorkspaceCockpit({
           <p className="mt-1 aurora-text-code text-[var(--aurora-text-muted)]">
             {workspace.incusProject} / {workspace.incusContainer}
           </p>
+          <WorkspaceMetaStrip workspace={workspace} />
         </div>
 
         <div className="flex flex-col items-start gap-3 lg:items-end">
@@ -353,23 +273,18 @@ function WorkspaceCockpit({
         </div>
       </div>
 
-      <div className="grid gap-4 p-4">
+      <div className="grid gap-3 p-4">
         <ReadinessRunway workspace={workspace} />
-        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_260px]">
-          <WorkspaceTelemetryPanel
-            workspace={workspace}
-            history={history}
-            lastUpdated={lastUpdated}
-            polling={polling}
-            error={error}
-            live={live}
-          />
-          <WorkspaceFacts workspace={workspace} />
-        </div>
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(220px,0.45fr)]">
-          <WorkspaceFeatures workspace={workspace} />
-          <SetupProgressPanel workspace={workspace} />
-        </div>
+        <WorkspaceTelemetryPanel
+          workspace={workspace}
+          history={history}
+          lastUpdated={lastUpdated}
+          polling={polling}
+          error={error}
+          live={live}
+        />
+        <WorkspaceAccessStrip workspace={workspace} />
+        <SetupProgressPanel workspace={workspace} />
       </div>
     </section>
   );
@@ -453,73 +368,141 @@ function WorkspaceTelemetryPanel({
       {error ? (
         <p className="aurora-text-meta text-[var(--aurora-error)]">{error}</p>
       ) : null}
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-          <MetricBar
-            label="CPU (load avg)"
-            usedLabel={workspace.resources.cpu}
-            percentValue={cpuPercent}
-            tone="info"
-          />
+      <div className="grid gap-2 lg:grid-cols-3">
+        <MetricTile
+          label="CPU"
+          usedLabel={workspace.resources.cpu}
+          percentValue={cpuPercent}
+          tone="info"
+        >
           <Sparkline
             history={history}
             metric="cpuPercent"
             tone="var(--aurora-accent-primary)"
           />
-        </div>
-        <div className="space-y-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-          <MetricBar
-            label="Memory"
-            usedLabel={workspace.resources.memory}
-            percentValue={memoryPercent}
-            tone="success"
-          />
+        </MetricTile>
+        <MetricTile
+          label="Memory"
+          usedLabel={workspace.resources.memory}
+          percentValue={memoryPercent}
+          tone="success"
+        >
           <Sparkline
             history={history}
             metric="memoryPercent"
             tone="var(--aurora-success)"
           />
-        </div>
-      </div>
-      <StatGrid>
-        <StatCard
-          compact
-          icon={ICON_STORAGE}
+        </MetricTile>
+        <MetricTile
           label="Storage"
-          value={metricValue(workspace.resources.storage)}
+          usedLabel={workspace.resources.storage}
+          percentValue={undefined}
           tone="warn"
-          style={{ borderRadius: 4, boxShadow: "none" }}
         />
-      </StatGrid>
+      </div>
     </section>
   );
 }
 
-function WorkspaceFacts({ workspace }: { workspace: Workspace }) {
-  const facts = [
+function MetricTile({
+  label,
+  usedLabel,
+  percentValue,
+  tone,
+  children,
+}: {
+  label: string;
+  usedLabel: string;
+  percentValue: number | undefined;
+  tone: "info" | "success" | "warn";
+  children?: ReactNode;
+}) {
+  return (
+    <div className="min-w-0 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+      <MetricBar
+        label={label}
+        usedLabel={usedLabel}
+        percentValue={percentValue}
+        tone={tone}
+      />
+      {children ? <div className="mt-2">{children}</div> : null}
+    </div>
+  );
+}
+
+function WorkspaceMetaStrip({ workspace }: { workspace: Workspace }) {
+  const items = [
     ["Image", workspace.image ?? workspace.templateVersion],
-    ["Storage", workspace.storagePool ?? "unknown"],
-    ["Bridge", workspace.networkBridge ?? "unknown"],
     ["Profile", workspace.resourceProfileId],
-    ["Path", workspace.workspaceHostPath ?? "profile default"],
-    ["Processes", workspace.resources.effectiveProcesses ?? "profile default"],
+    ["Bridge", workspace.networkBridge ?? "unknown"],
   ];
 
   return (
-    <aside className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-      <SectionLabel icon={InfoIcon}>Workspace facts</SectionLabel>
-      <dl className="mt-3 grid gap-2">
-        {facts.map(([label, value]) => (
-          <div key={label} className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 border-b border-[var(--aurora-border-default)] pb-2 last:border-b-0 last:pb-0">
-            <dt className="aurora-text-meta">{label}</dt>
-            <dd className="truncate aurora-text-ui text-[var(--aurora-text-primary)]" title={value}>
-              {value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </aside>
+    <dl className="mt-3 flex min-w-0 flex-wrap gap-1.5">
+      {items.map(([label, value]) => (
+        <div
+          key={label}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-2 py-1"
+          title={`${label}: ${value}`}
+        >
+          <dt className="aurora-text-meta">{label}</dt>
+          <dd className="max-w-[18rem] truncate aurora-text-code text-[var(--aurora-text-primary)]">
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
+}
+
+function CompactSignal({
+  icon: Icon,
+  label,
+  value,
+  badge,
+  tone,
+  href,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  badge: string;
+  tone: "success" | "warn";
+  href?: string;
+}) {
+  const content = (
+    <>
+      <Icon
+        aria-hidden="true"
+        className="size-4 shrink-0"
+        style={{ color: tone === "success" ? "var(--aurora-success)" : "var(--aurora-warn)" }}
+      />
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="aurora-text-ui text-[var(--aurora-text-primary)]">
+            {label}
+          </p>
+          <Badge tone={tone} shape="tag">
+            {badge}
+          </Badge>
+        </div>
+        <p className="mt-0.5 truncate aurora-text-meta">{value}</p>
+      </div>
+    </>
+  );
+
+  const className =
+    "grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_45%,transparent)] p-3";
+
+  if (href) {
+    return (
+      <a className={className} href={href}>
+        {content}
+      </a>
+    );
+  }
+
+  return <div className={className}>{content}</div>;
 }
 
 function ToolDeck({
@@ -528,20 +511,22 @@ function ToolDeck({
   setActiveTool,
 }: {
   workspace: Workspace;
-  activeTool: WorkspaceTool;
-  setActiveTool: (tool: WorkspaceTool) => void;
+  activeTool: WorkspaceTool | null;
+  setActiveTool: (tool: WorkspaceTool | null) => void;
 }) {
   return (
-    <aside className="min-w-0 rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)] lg:sticky lg:top-3 lg:max-h-[calc(100vh-1.5rem)] lg:overflow-auto">
-      <div className="border-b border-[var(--aurora-border-default)] p-3">
-        <div className="flex items-center justify-between gap-3">
+    <section className="min-w-0 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <SlidersHorizontalIcon
+            aria-hidden="true"
+            className="size-4 shrink-0 text-[var(--aurora-accent-primary)]"
+          />
           <div>
-            <p className="aurora-text-label text-[var(--aurora-text-muted)]">Command dock</p>
-            <p className="aurora-text-ui text-[var(--aurora-text-primary)]">Run, build, tune, inspect</p>
+            <p className="aurora-text-label text-[var(--aurora-text-primary)]">Tools</p>
           </div>
-          <Badge tone="info" shape="tag">{activeTool}</Badge>
         </div>
-        <div className="mt-3 grid grid-cols-4 gap-1.5">
+        <div className="flex items-center gap-1.5">
           {WORKSPACE_TOOLS.map((tool) => (
             <Tooltip key={tool}>
               <TooltipTrigger asChild>
@@ -558,12 +543,30 @@ function ToolDeck({
               <TooltipContent>{toolLabel(tool)}</TooltipContent>
             </Tooltip>
           ))}
+          {activeTool ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Close command panel"
+                  onClick={() => setActiveTool(null)}
+                >
+                  <XIcon aria-hidden="true" className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Close</TooltipContent>
+            </Tooltip>
+          ) : null}
         </div>
       </div>
-      <div className="min-w-0 p-3">
-        <ActiveToolPanel workspace={workspace} activeTool={activeTool} />
-      </div>
-    </aside>
+      {activeTool ? (
+        <div className="min-w-0 border-t border-[var(--aurora-border-default)] p-3">
+          <ActiveToolPanel workspace={workspace} activeTool={activeTool} />
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -674,7 +677,7 @@ export function WorkspaceDashboard({
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(
     inventory.workspaces[0]?.id,
   );
-  const [activeTool, setActiveTool] = useState<WorkspaceTool>("agents");
+  const [activeTool, setActiveTool] = useState<WorkspaceTool | null>(null);
   const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
   const hasMultipleWorkspaces = inventory.workspaces.length > 1;
 
@@ -733,8 +736,8 @@ export function WorkspaceDashboard({
               <div
                 className={
                   hasMultipleWorkspaces
-                    ? "grid min-w-0 items-start gap-3 xl:grid-cols-[220px_minmax(0,1fr)_minmax(340px,420px)]"
-                    : "grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]"
+                    ? "grid min-w-0 items-start gap-3 xl:grid-cols-[220px_minmax(0,1fr)]"
+                    : "grid min-w-0 items-start gap-3"
                 }
               >
                 {hasMultipleWorkspaces ? (
@@ -784,16 +787,18 @@ export function WorkspaceDashboard({
                     ))}
                   </nav>
                 ) : null}
-                <WorkspacePane
-                  key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
-                  workspace={primaryWorkspace}
-                />
-                <ToolDeck
-                  key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}:tools`}
-                  workspace={primaryWorkspace}
-                  activeTool={activeTool}
-                  setActiveTool={setActiveTool}
-                />
+                <div className="grid min-w-0 gap-3">
+                  <ToolDeck
+                    key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}:tools`}
+                    workspace={primaryWorkspace}
+                    activeTool={activeTool}
+                    setActiveTool={setActiveTool}
+                  />
+                  <WorkspacePane
+                    key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                    workspace={primaryWorkspace}
+                  />
+                </div>
               </div>
             ) : null
           ) : (
