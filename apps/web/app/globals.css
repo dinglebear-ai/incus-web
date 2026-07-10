@@ -148,6 +148,7 @@
 }
 
 :root {
+  --soft-edge: color-mix(in srgb, var(--aurora-border-default) 45%, var(--aurora-page-bg));
   --background: var(--aurora-page-bg);
   --foreground: var(--aurora-text-primary);
   --card: var(--aurora-panel-medium);
