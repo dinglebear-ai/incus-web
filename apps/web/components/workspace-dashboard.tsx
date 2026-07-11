@@ -1,19 +1,23 @@
 "use client";
 
 import {
+  ActivityIcon,
   BotIcon,
   BoxesIcon,
   CircleGaugeIcon,
+  CpuIcon,
   DatabaseIcon,
   GitBranchIcon,
   HammerIcon,
+  HardDriveIcon,
   InfoIcon,
+  MemoryStickIcon,
+  NetworkIcon,
   SettingsIcon,
   SlidersHorizontalIcon,
   ShieldCheckIcon,
   TerminalIcon,
   UserRoundIcon,
-  XIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
@@ -156,28 +160,6 @@ function SetupProgressPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
-function WorkspaceAccessStrip({ workspace }: { workspace: Workspace }) {
-  return (
-    <section className="grid gap-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 md:grid-cols-2">
-      <CompactSignal
-        icon={TerminalIcon}
-        label="Terminal"
-        value={workspace.terminalUrl ? workspace.terminalUrl : "Route pending"}
-        badge={workspace.terminalUrl ? "live" : "pending"}
-        tone={workspace.terminalUrl ? "success" : "warn"}
-        href={workspace.terminalUrl}
-      />
-      <CompactSignal
-        icon={GitBranchIcon}
-        label="Dotfiles"
-        value="Setup-managed user state"
-        badge={workspace.setup.dotfilesStatus}
-        tone={workspace.setup.dotfilesStatus === "ok" ? "success" : "warn"}
-      />
-    </section>
-  );
-}
-
 function SectionLabel({
   icon: Icon,
   children,
@@ -210,7 +192,15 @@ function sectionToneColor(tone: "cyan" | "rose" | "success") {
   }
 }
 
-function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
+function WorkspacePane({
+  workspace: seed,
+  activeTool,
+  setActiveTool,
+}: {
+  workspace: Workspace;
+  activeTool: WorkspaceTool;
+  setActiveTool: (tool: WorkspaceTool) => void;
+}) {
   const { workspace, history, lastUpdated, polling, error } =
     useWorkspaceTelemetry(seed);
   const live = isLiveState(workspace.state);
@@ -223,6 +213,8 @@ function WorkspacePane({ workspace: seed }: { workspace: Workspace }) {
       polling={polling}
       error={error}
       live={live}
+      activeTool={activeTool}
+      setActiveTool={setActiveTool}
     />
   );
 }
@@ -234,6 +226,8 @@ function WorkspaceCockpit({
   polling,
   error,
   live,
+  activeTool,
+  setActiveTool,
 }: {
   workspace: Workspace;
   history: Sample[];
@@ -241,99 +235,187 @@ function WorkspaceCockpit({
   polling: boolean;
   error?: string;
   live: boolean;
+  activeTool: WorkspaceTool;
+  setActiveTool: (tool: WorkspaceTool) => void;
 }) {
   return (
-    <section className="min-w-0 max-w-full overflow-hidden rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
-      <div className="grid gap-3 border-b border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="truncate aurora-text-section text-[var(--aurora-text-primary)]">
-              {workspace.name}
-            </h1>
-            <Badge
-              tone={stateTone(workspace.state)}
-              dot
-              pulse={workspace.state === "running"}
-            >
-              {workspace.state}
-            </Badge>
+    <section className="grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,430px)]">
+      <article className="min-w-0 overflow-hidden rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
+        <div className="grid gap-3 border-b border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-[1.35rem] font-semibold leading-tight text-[var(--aurora-text-primary)]">
+                {workspace.name}
+              </h1>
+              <Badge
+                tone={stateTone(workspace.state)}
+                dot
+                pulse={workspace.state === "running"}
+              >
+                {workspace.state}
+              </Badge>
+            </div>
+            <p className="mt-1 aurora-text-code text-[var(--aurora-text-muted)]">
+              {workspace.incusProject} / {workspace.incusContainer}
+            </p>
           </div>
-          <p className="mt-1 aurora-text-code text-[var(--aurora-text-muted)]">
-            {workspace.incusProject} / {workspace.incusContainer}
-          </p>
-          <WorkspaceMetaStrip workspace={workspace} />
-        </div>
-
-        <div className="flex flex-col items-start gap-3 lg:items-end">
-          <StatusIndicator
-            tone={stateStatusTone(workspace.state)}
-            label={workspace.state}
-          />
           <WorkspaceActions workspace={workspace} />
         </div>
-      </div>
 
-      <div className="grid gap-3 p-4">
-        <ReadinessRunway workspace={workspace} />
-        <WorkspaceTelemetryPanel
-          workspace={workspace}
-          history={history}
-          lastUpdated={lastUpdated}
-          polling={polling}
-          error={error}
-          live={live}
-        />
-        <WorkspaceAccessStrip workspace={workspace} />
-        <SetupProgressPanel workspace={workspace} />
-      </div>
+        <div className="grid gap-3 p-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(280px,0.8fr)_minmax(0,1fr)]">
+            <LaunchPanel workspace={workspace} />
+            <SignalMatrix workspace={workspace} />
+          </div>
+          <WorkspaceTelemetryPanel
+            workspace={workspace}
+            history={history}
+            lastUpdated={lastUpdated}
+            polling={polling}
+            error={error}
+            live={live}
+          />
+          <WorkspaceMetaBar workspace={workspace} />
+          <SetupProgressPanel workspace={workspace} />
+        </div>
+      </article>
+
+      <ToolDeck
+        workspace={workspace}
+        activeTool={activeTool}
+        setActiveTool={setActiveTool}
+      />
     </section>
   );
 }
 
-function ReadinessRunway({ workspace }: { workspace: Workspace }) {
-  const stops = [
+function LaunchPanel({ workspace }: { workspace: Workspace }) {
+  return (
+    <section className="grid min-h-[178px] content-between gap-4 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-strong)] bg-[color-mix(in_srgb,var(--aurora-control-surface)_82%,transparent)] p-4 shadow-[var(--aurora-highlight-medium)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="aurora-text-meta">Primary route</p>
+          <h2 className="mt-1 truncate text-[1.1rem] font-semibold text-[var(--aurora-text-primary)]">
+            Terminal
+          </h2>
+          <p className="mt-1 truncate aurora-text-code text-[var(--aurora-text-muted)]">
+            {workspace.terminalUrl ?? "route pending"}
+          </p>
+        </div>
+        <StatusIndicator
+          tone={workspace.terminalUrl ? "online" : "queued"}
+          label={workspace.terminalUrl ? "ready" : "pending"}
+        />
+      </div>
+      <Button
+        asChild={Boolean(workspace.terminalUrl)}
+        size="default"
+        variant={workspace.terminalUrl ? "aurora" : "neutral"}
+        disabled={!workspace.terminalUrl}
+        aria-label="Open terminal"
+        className="h-12 justify-start gap-3"
+      >
+        {workspace.terminalUrl ? (
+          <a href={workspace.terminalUrl}>
+            <TerminalIcon aria-hidden="true" className="size-5" />
+            <span>Open terminal</span>
+          </a>
+        ) : (
+          <>
+            <TerminalIcon aria-hidden="true" className="size-5" />
+            <span>Terminal pending</span>
+          </>
+        )}
+      </Button>
+    </section>
+  );
+}
+
+function SignalMatrix({ workspace }: { workspace: Workspace }) {
+  const signals = [
     {
-      label: "Terminal route",
-      value: workspace.terminalUrl ? "ready" : "pending",
-      tone: workspace.terminalUrl ? "online" : "queued",
+      icon: ActivityIcon,
+      label: "Workspace",
+      value: workspace.state,
+      tone: stateStatusTone(workspace.state),
     },
     {
+      icon: DatabaseIcon,
       label: "Setup",
       value: setupPhaseLabel(workspace.setup.phase),
       tone: setupStatusTone(workspace.setup.phase),
     },
     {
+      icon: GitBranchIcon,
       label: "Dotfiles",
       value: workspace.setup.dotfilesStatus,
       tone: workspace.setup.dotfilesStatus === "ok" ? "online" : "degraded",
     },
     {
-      label: "Workspace",
-      value: workspace.state,
-      tone: stateStatusTone(workspace.state),
+      icon: NetworkIcon,
+      label: "Bridge",
+      value: workspace.networkBridge ?? "unknown",
+      tone: workspace.networkBridge ? "online" : "queued",
     },
   ] satisfies Array<{
+    icon: LucideIcon;
     label: string;
     value: string;
     tone: React.ComponentProps<typeof StatusIndicator>["tone"];
   }>;
 
   return (
-    <section className="grid gap-2 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-control-surface)] p-3 shadow-[var(--aurora-highlight-medium)] sm:grid-cols-2 xl:grid-cols-4">
-      {stops.map((stop) => (
+    <section className="grid gap-2 sm:grid-cols-2">
+      {signals.map(({ icon: Icon, label, value, tone }) => (
         <div
-          key={stop.label}
-          className="min-w-0 border-b border-[var(--aurora-border-default)] pb-2 last:border-b-0 sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3 sm:last:border-r-0"
+          key={label}
+          className="grid min-h-[84px] grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2"
         >
-          <p className="aurora-text-meta">{stop.label}</p>
-          <StatusIndicator
-            className="mt-1 max-w-full"
-            tone={stop.tone}
-            label={<span className="truncate">{stop.value}</span>}
-          />
+          <span className="flex size-9 items-center justify-center rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)]">
+            <Icon aria-hidden="true" className="size-4 text-[var(--aurora-accent-primary)]" />
+          </span>
+          <div className="min-w-0">
+            <p className="aurora-text-meta">{label}</p>
+            <StatusIndicator
+              className="mt-1 max-w-full"
+              tone={tone}
+              label={<span className="truncate">{value}</span>}
+            />
+          </div>
         </div>
       ))}
     </section>
+  );
+}
+
+function WorkspaceMetaBar({ workspace }: { workspace: Workspace }) {
+  const items = [
+    { icon: BoxesIcon, label: "Image", value: workspace.image ?? workspace.templateVersion },
+    { icon: SlidersHorizontalIcon, label: "Profile", value: workspace.resourceProfileId },
+    { icon: HardDriveIcon, label: "Storage", value: workspace.resources.storage },
+  ];
+
+  return (
+    <dl className="grid gap-2 lg:grid-cols-3">
+      {items.map(({ icon: Icon, label, value }) => (
+        <div
+          key={label}
+          className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2"
+          title={`${label}: ${value}`}
+        >
+          <Icon
+            aria-hidden="true"
+            className="size-4 text-[var(--aurora-text-muted)]"
+          />
+          <div className="min-w-0">
+            <dt className="aurora-text-meta">{label}</dt>
+            <dd className="truncate aurora-text-code text-[var(--aurora-text-primary)]">
+              {value}
+            </dd>
+          </div>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -370,6 +452,7 @@ function WorkspaceTelemetryPanel({
       ) : null}
       <div className="grid gap-2 lg:grid-cols-3">
         <MetricTile
+          icon={CpuIcon}
           label="CPU"
           usedLabel={workspace.resources.cpu}
           percentValue={cpuPercent}
@@ -382,6 +465,7 @@ function WorkspaceTelemetryPanel({
           />
         </MetricTile>
         <MetricTile
+          icon={MemoryStickIcon}
           label="Memory"
           usedLabel={workspace.resources.memory}
           percentValue={memoryPercent}
@@ -394,6 +478,7 @@ function WorkspaceTelemetryPanel({
           />
         </MetricTile>
         <MetricTile
+          icon={HardDriveIcon}
           label="Storage"
           usedLabel={workspace.resources.storage}
           percentValue={undefined}
@@ -405,12 +490,14 @@ function WorkspaceTelemetryPanel({
 }
 
 function MetricTile({
+  icon: Icon,
   label,
   usedLabel,
   percentValue,
   tone,
   children,
 }: {
+  icon: LucideIcon;
   label: string;
   usedLabel: string;
   percentValue: number | undefined;
@@ -419,90 +506,20 @@ function MetricTile({
 }) {
   return (
     <div className="min-w-0 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-      <MetricBar
-        label={label}
-        usedLabel={usedLabel}
-        percentValue={percentValue}
-        tone={tone}
-      />
+      <div className="flex items-center gap-2">
+        <Icon aria-hidden="true" className="size-4 text-[var(--aurora-accent-primary)]" />
+        <div className="min-w-0 flex-1">
+          <MetricBar
+            label={label}
+            usedLabel={usedLabel}
+            percentValue={percentValue}
+            tone={tone}
+          />
+        </div>
+      </div>
       {children ? <div className="mt-2">{children}</div> : null}
     </div>
   );
-}
-
-function WorkspaceMetaStrip({ workspace }: { workspace: Workspace }) {
-  const items = [
-    ["Image", workspace.image ?? workspace.templateVersion],
-    ["Profile", workspace.resourceProfileId],
-    ["Bridge", workspace.networkBridge ?? "unknown"],
-  ];
-
-  return (
-    <dl className="mt-3 flex min-w-0 flex-wrap gap-1.5">
-      {items.map(([label, value]) => (
-        <div
-          key={label}
-          className="inline-flex max-w-full items-center gap-1.5 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-2 py-1"
-          title={`${label}: ${value}`}
-        >
-          <dt className="aurora-text-meta">{label}</dt>
-          <dd className="max-w-[18rem] truncate aurora-text-code text-[var(--aurora-text-primary)]">
-            {value}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function CompactSignal({
-  icon: Icon,
-  label,
-  value,
-  badge,
-  tone,
-  href,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  badge: string;
-  tone: "success" | "warn";
-  href?: string;
-}) {
-  const content = (
-    <>
-      <Icon
-        aria-hidden="true"
-        className="size-4 shrink-0"
-        style={{ color: tone === "success" ? "var(--aurora-success)" : "var(--aurora-warn)" }}
-      />
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className="aurora-text-ui text-[var(--aurora-text-primary)]">
-            {label}
-          </p>
-          <Badge tone={tone} shape="tag">
-            {badge}
-          </Badge>
-        </div>
-        <p className="mt-0.5 truncate aurora-text-meta">{value}</p>
-      </div>
-    </>
-  );
-
-  const className =
-    "grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_45%,transparent)] p-3";
-
-  if (href) {
-    return (
-      <a className={className} href={href}>
-        {content}
-      </a>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
 }
 
 function ToolDeck({
@@ -511,20 +528,18 @@ function ToolDeck({
   setActiveTool,
 }: {
   workspace: Workspace;
-  activeTool: WorkspaceTool | null;
-  setActiveTool: (tool: WorkspaceTool | null) => void;
+  activeTool: WorkspaceTool;
+  setActiveTool: (tool: WorkspaceTool) => void;
 }) {
   return (
-    <section className="min-w-0 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3">
-        <div className="flex min-w-0 items-center gap-3">
+    <aside className="min-w-0 overflow-hidden rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)] shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)]">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--aurora-border-default)] p-3">
+        <div className="flex min-w-0 items-center gap-2">
           <SlidersHorizontalIcon
             aria-hidden="true"
             className="size-4 shrink-0 text-[var(--aurora-accent-primary)]"
           />
-          <div>
-            <p className="aurora-text-label text-[var(--aurora-text-primary)]">Tools</p>
-          </div>
+          <p className="aurora-text-label text-[var(--aurora-text-primary)]">Command rail</p>
         </div>
         <div className="flex items-center gap-1.5">
           {WORKSPACE_TOOLS.map((tool) => (
@@ -543,30 +558,12 @@ function ToolDeck({
               <TooltipContent>{toolLabel(tool)}</TooltipContent>
             </Tooltip>
           ))}
-          {activeTool ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Close command panel"
-                  onClick={() => setActiveTool(null)}
-                >
-                  <XIcon aria-hidden="true" className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Close</TooltipContent>
-            </Tooltip>
-          ) : null}
         </div>
       </div>
-      {activeTool ? (
-        <div className="min-w-0 border-t border-[var(--aurora-border-default)] p-3">
-          <ActiveToolPanel workspace={workspace} activeTool={activeTool} />
-        </div>
-      ) : null}
-    </section>
+      <div className="max-h-[calc(100vh-8rem)] min-w-0 overflow-auto p-3">
+        <ActiveToolPanel workspace={workspace} activeTool={activeTool} />
+      </div>
+    </aside>
   );
 }
 
@@ -677,7 +674,7 @@ export function WorkspaceDashboard({
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(
     inventory.workspaces[0]?.id,
   );
-  const [activeTool, setActiveTool] = useState<WorkspaceTool | null>(null);
+  const [activeTool, setActiveTool] = useState<WorkspaceTool>("inspect");
   const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
   const hasMultipleWorkspaces = inventory.workspaces.length > 1;
 
@@ -788,15 +785,11 @@ export function WorkspaceDashboard({
                   </nav>
                 ) : null}
                 <div className="grid min-w-0 gap-3">
-                  <ToolDeck
-                    key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}:tools`}
-                    workspace={primaryWorkspace}
-                    activeTool={activeTool}
-                    setActiveTool={setActiveTool}
-                  />
                   <WorkspacePane
                     key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
                     workspace={primaryWorkspace}
+                    activeTool={activeTool}
+                    setActiveTool={setActiveTool}
                   />
                 </div>
               </div>

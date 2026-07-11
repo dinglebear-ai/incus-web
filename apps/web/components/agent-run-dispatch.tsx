@@ -179,9 +179,9 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
         </p>
       ) : null}
 
-      <div className="grid gap-0 2xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
+      <div className="grid gap-0">
         <form
-          className="space-y-3 border-b border-[var(--aurora-border-default)] p-4 2xl:border-b-0 2xl:border-r"
+          className="space-y-3 border-b border-[var(--aurora-border-default)] p-4"
           onSubmit={submitRun}
         >
           <Field htmlFor="agent-run-agent" label="Agent">

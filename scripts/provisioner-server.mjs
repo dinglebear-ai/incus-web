@@ -533,6 +533,7 @@ function isUnsetIncusRead(message) {
     "No such object",
     "The requested key could not be found",
     "Config key not found",
+    "Device from profile(s) cannot be retrieved for individual instance",
   ].some((needle) => message.includes(needle));
 }
 
@@ -1195,6 +1196,12 @@ async function handleCommand(command, options) {
       );
     }
     const message = err instanceof Error ? err.message : String(err);
+    console.warn("workspace operation failed", {
+      type: command?.type,
+      requestId: command?.requestId,
+      workspaceId: command?.workspace?.id,
+      message,
+    });
     return operation(
       command,
       "failed",
