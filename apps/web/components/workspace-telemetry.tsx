@@ -194,6 +194,7 @@ export function Sparkline({
   metric: "cpuPercent" | "memoryPercent";
   tone?: string;
 }) {
+  const gradientId = React.useId();
   const points = history
     .map((sample) => sample[metric])
     .filter((value): value is number => value !== undefined);
@@ -227,6 +228,16 @@ export function Sparkline({
       role="img"
       aria-label={`${metric === "cpuPercent" ? "CPU" : "Memory"} trend, last ${points.length} samples`}
     >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={tone} stopOpacity="0.26" />
+          <stop offset="100%" stopColor={tone} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon
+        points={`0,${height} ${coords} ${width},${height}`}
+        fill={`url(#${gradientId})`}
+      />
       <polyline
         points={coords}
         fill="none"

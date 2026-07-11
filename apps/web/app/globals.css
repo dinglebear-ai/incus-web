@@ -358,6 +358,9 @@
   * {
     @apply border-border outline-ring/50;
   }
+  ::selection {
+    background: color-mix(in srgb, var(--aurora-accent-primary) 28%, transparent);
+  }
   body {
     @apply bg-background text-foreground;
     background: var(--aurora-shell-bg);

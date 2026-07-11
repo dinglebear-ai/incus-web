@@ -14,13 +14,20 @@ import {
   LayersIcon,
   MemoryStickIcon,
   NetworkIcon,
+  SearchIcon,
   SettingsIcon,
   ShieldCheckIcon,
   TerminalIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
-import { Suspense, lazy, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
+
+import {
+  CommandPalette,
+  type CommandPaletteItem,
+} from "@/components/command-palette";
+import { WorkspaceActivityRail } from "@/components/workspace-activity-rail";
 
 import { Badge } from "@/components/ui/aurora/badge";
 import { Card } from "@/components/ui/aurora/card";
@@ -317,9 +324,11 @@ function WorkspaceSidebar({
 function TopBar({
   inventory,
   workspaceName,
+  onOpenPalette,
 }: {
   inventory: WorkspaceInventory;
   workspaceName?: string;
+  onOpenPalette: () => void;
 }) {
   const initial = (inventory.actor.displayName ?? inventory.actor.email)
     .charAt(0)
@@ -343,6 +352,19 @@ function TopBar({
       </div>
 
       <div className="flex-1" />
+
+      <button
+        type="button"
+        onClick={onOpenPalette}
+        aria-label="Search workspaces, tools, and actions"
+        className={`hidden h-[34px] min-w-[230px] items-center gap-2.5 px-3 text-[12.5px] text-[var(--aurora-text-muted)] transition-colors hover:border-[var(--aurora-border-strong)] md:flex ${SUBPANEL} rounded-[5px]`}
+      >
+        <SearchIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span>Search workspace…</span>
+        <kbd className="ml-auto rounded-[3px] border border-[var(--soft-edge)] bg-[var(--aurora-nav-bg)] px-1.5 py-0.5 font-sans text-[10.5px]">
+          ⌘K
+        </kbd>
+      </button>
 
       <span
         className={`hidden items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-[var(--aurora-success)] sm:inline-flex ${SUBPANEL} rounded-[4px]`}
@@ -747,18 +769,21 @@ function WorkspaceOverview({
   live: boolean;
 }) {
   return (
-    <div className="grid gap-4">
-      <ReadinessRunway workspace={workspace} />
-      <WorkspaceTelemetryPanel
-        workspace={workspace}
-        history={history}
-        lastUpdated={lastUpdated}
-        polling={polling}
-        error={error}
-        live={live}
-      />
-      <WorkspaceAccessStrip workspace={workspace} />
-      <SetupProgressPanel workspace={workspace} />
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="grid min-w-0 gap-4">
+        <ReadinessRunway workspace={workspace} />
+        <WorkspaceTelemetryPanel
+          workspace={workspace}
+          history={history}
+          lastUpdated={lastUpdated}
+          polling={polling}
+          error={error}
+          live={live}
+        />
+        <WorkspaceAccessStrip workspace={workspace} />
+        <SetupProgressPanel workspace={workspace} />
+      </div>
+      <WorkspaceActivityRail workspace={workspace} />
     </div>
   );
 }
@@ -871,7 +896,58 @@ export function WorkspaceDashboard({
     inventory.workspaces[0]?.id,
   );
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((current) => !current);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const paletteItems: CommandPaletteItem[] = [
+    ...inventory.workspaces.map((workspace) => ({
+      id: `workspace:${workspace.id}`,
+      title: workspace.name,
+      sub: `${workspace.incusProject} / ${workspace.incusContainer} · ${workspace.state.replaceAll("_", " ")}`,
+      kind: "workspace",
+      icon: BoxIcon,
+      accent: stateColor(workspace.state),
+      run: () => {
+        setActiveWorkspaceId(workspace.id);
+        setActiveTab("overview");
+      },
+    })),
+    ...(primaryWorkspace
+      ? TABS.map((tab) => ({
+          id: `tab:${tab.id}`,
+          title: tab.label,
+          sub: `Jump to ${tab.label.toLowerCase()} for ${primaryWorkspace.name}`,
+          kind: "view",
+          icon: tab.icon,
+          accent: "var(--aurora-accent-primary)",
+          run: () => setActiveTab(tab.id),
+        }))
+      : []),
+    ...(primaryWorkspace?.terminalUrl
+      ? [
+          {
+            id: "action:terminal",
+            title: "Open terminal",
+            sub: primaryWorkspace.terminalUrl,
+            kind: "action",
+            icon: TerminalIcon,
+            accent: "var(--aurora-success)",
+            run: () => window.location.assign(primaryWorkspace.terminalUrl!),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <main className="aurora-page-shell flex min-h-screen text-[var(--aurora-text-primary)]">
@@ -886,7 +962,11 @@ export function WorkspaceDashboard({
         />
 
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <TopBar inventory={inventory} workspaceName={primaryWorkspace?.name} />
+          <TopBar
+            inventory={inventory}
+            workspaceName={primaryWorkspace?.name}
+            onOpenPalette={() => setPaletteOpen(true)}
+          />
 
           <div className="min-w-0 flex-1 overflow-x-hidden">
             <div className="mx-auto w-full max-w-[1240px] px-4 py-5 md:px-7 md:py-6">
@@ -905,6 +985,12 @@ export function WorkspaceDashboard({
             </div>
           </div>
         </div>
+
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          items={paletteItems}
+        />
       </TooltipProvider>
     </main>
   );
