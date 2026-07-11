@@ -14,6 +14,11 @@ import { Button } from "@/components/ui/aurora/button";
 import { Callout } from "@/components/ui/aurora/callout";
 import { Field } from "@/components/ui/aurora/field";
 import { Input } from "@/components/ui/aurora/input";
+import {
+  PANEL,
+  PANEL_HEADER,
+  SUBPANEL,
+} from "@/components/ui/aurora/panel-chrome";
 import { GoldenConfigImport } from "@/components/golden-config-import";
 import { apiErrorMessage } from "@/lib/api-error-message";
 import type { Workspace } from "@/lib/workspaces/types";
@@ -117,17 +122,23 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
   }
 
   return (
-    <section className="space-y-4 rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] p-4 shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
-      <div className="flex items-center gap-2">
+    <section className="space-y-3">
+      <div className="flex items-center gap-2.5">
         <SlidersHorizontalIcon className="size-4 text-[var(--aurora-accent-primary)]" />
-        <h2 className="aurora-text-section text-[var(--aurora-text-primary)]">Settings</h2>
+        <h2 className="font-[family-name:var(--aurora-font-display)] text-[16px] font-bold text-[var(--aurora-text-primary)]">
+          Settings
+        </h2>
+        <div className="h-px flex-1 bg-[var(--soft-edge)]" />
       </div>
 
-      <section className="space-y-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-        <div className="flex items-center gap-2">
+      <section className={`${PANEL} overflow-hidden`}>
+        <div className={PANEL_HEADER}>
           <DatabaseIcon className="size-4 text-[var(--aurora-accent-pink)]" />
-          <p className="aurora-text-ui">Limits</p>
+          <p className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
+            Limits
+          </p>
         </div>
+        <div className="space-y-3 p-4">
         <div className="grid gap-2 sm:grid-cols-2">
           <Field htmlFor="workspace-cpu-limit" label="CPU limit">
             <Input id="workspace-cpu-limit" value={cpu} onChange={(event) => setCpu(event.target.value)} placeholder="2" />
@@ -144,13 +155,17 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
           Save limits
         </Button>
         <StatusLine success={status.setLimits} error={errors.setLimits} />
+        </div>
       </section>
 
-      <section className="space-y-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-        <div className="flex items-center gap-2">
+      <section className={`${PANEL} overflow-hidden`}>
+        <div className={PANEL_HEADER}>
           <FolderIcon className="size-4 text-[var(--aurora-success)]" />
-          <p className="aurora-text-ui">Mount</p>
+          <p className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
+            Mount
+          </p>
         </div>
+        <div className="space-y-3 p-4">
         <Field htmlFor="workspace-host-path" label="Workspace host path">
           <Input id="workspace-host-path" value={hostPath} onChange={(event) => setHostPath(event.target.value)} />
         </Field>
@@ -171,13 +186,17 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
           </Button>
         </div>
         <StatusLine success={status.setMount ?? status.clearMount} error={errors.setMount ?? errors.clearMount} />
+        </div>
       </section>
 
-      <section className="space-y-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-        <div className="flex items-center gap-2">
+      <section className={`${PANEL} overflow-hidden`}>
+        <div className={PANEL_HEADER}>
           <ArchiveIcon className="size-4 text-[var(--aurora-accent-primary)]" />
-          <p className="aurora-text-ui">Snapshots</p>
+          <p className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
+            Snapshots
+          </p>
         </div>
+        <div className="space-y-3 p-4">
         <Field htmlFor="snapshot-name" label="Snapshot name">
           <Input
             id="snapshot-name"
@@ -196,16 +215,25 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
         <StatusLine success={status.createSnapshot} error={errors.createSnapshot ?? errors.snapshots} />
         <div className="space-y-2">
           {snapshots.length > 0 ? snapshots.map((snapshot) => (
-            <div key={snapshot.name} className="rounded-[8px] border border-[var(--aurora-border-default)] p-2 aurora-text-meta">
-              {snapshot.name}{snapshot.createdAt ? ` · ${new Date(snapshot.createdAt).toLocaleString()}` : ""}
+            <div
+              key={snapshot.name}
+              className={`${SUBPANEL} flex items-center justify-between gap-3 px-3 py-2`}
+            >
+              <span className="truncate font-[family-name:var(--aurora-font-mono)] text-[11.5px] text-[var(--aurora-text-primary)]">
+                {snapshot.name}
+              </span>
+              <span className="shrink-0 aurora-text-meta">
+                {snapshot.createdAt ? new Date(snapshot.createdAt).toLocaleString() : ""}
+              </span>
             </div>
           )) : (
             <p className="aurora-text-meta">No snapshots yet.</p>
           )}
         </div>
+        </div>
       </section>
 
-      <section className="space-y-3 rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+      <section className={`${PANEL} p-4`}>
         <GoldenConfigImport workspace={workspace} />
       </section>
 

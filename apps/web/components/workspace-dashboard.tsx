@@ -29,6 +29,7 @@ import {
   DescriptionList,
 } from "@/components/ui/aurora/description-list";
 import { TooltipProvider } from "@/components/ui/aurora/tooltip";
+import { GlowDot, PANEL, SUBPANEL } from "@/components/ui/aurora/panel-chrome";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
@@ -68,14 +69,6 @@ const WorkspaceSettingsPanel = dynamic(
 
 type WorkspaceTool = "agents" | "builder" | "settings" | "inspect";
 type WorkspaceTab = "overview" | WorkspaceTool;
-
-/* ── Panel grammar (Homelab Hub / Aurora) ────────────────────────────────
- * Cards: vertical panel gradient, soft edge, 8px radius, medium shadow with
- * an inset top highlight. Status is always a glowing dot + colored label. */
-const PANEL =
-  "rounded-[8px] border border-[var(--soft-edge)] bg-[linear-gradient(180deg,var(--aurora-panel-strong-top),var(--aurora-panel-strong))] shadow-[var(--aurora-shadow-medium),var(--aurora-highlight-medium)]";
-const SUBPANEL =
-  "rounded-[6px] border border-[var(--soft-edge)] bg-[var(--aurora-control-surface)]";
 
 function stateColor(state: WorkspaceState) {
   if (state === "running") return "var(--aurora-success)";
@@ -123,21 +116,6 @@ function setupPhaseLabel(phase: SetupPhase) {
 }
 
 /* ── Shared atoms ──────────────────────────────────────────────────────── */
-
-function GlowDot({ color, size = 8 }: { color: string; size?: number }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block shrink-0 rounded-full"
-      style={{
-        width: size,
-        height: size,
-        background: color,
-        boxShadow: `0 0 7px ${color}`,
-      }}
-    />
-  );
-}
 
 function StatePill({ state }: { state: WorkspaceState }) {
   const color = stateColor(state);
@@ -832,7 +810,7 @@ function WorkspacePane({
           live={live}
         />
       ) : (
-        <div className={`${PANEL} min-w-0 p-4`}>
+        <div className="min-w-0">
           <ActiveToolPanel workspace={workspace} activeTool={activeTab} />
         </div>
       )}
