@@ -46,6 +46,8 @@ export function useToast(): ToastContextValue {
 
 const SLIDE_ID = "aurora-toast-slide";
 
+const emptySubscribe = () => () => {};
+
 function injectSlideKeyframes() {
   if (typeof document === "undefined") return;
   if (document.getElementById(SLIDE_ID)) return;
@@ -292,8 +294,18 @@ export function ToastProvider({ children, position = "top-right" }: ToastProvide
 
   const contextValue = React.useMemo(() => ({ toast }), [toast]);
 
+  // Hydration-safe mount check: returns false during SSR and the hydration
+  // render, true afterwards. A bare `typeof document` branch here makes the
+  // first client render differ from the server HTML and React 19 rejects
+  // the hydration.
+  const mounted = React.useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+
   const portal =
-    typeof document !== "undefined"
+    mounted
       ? createPortal(
           <div
             aria-label="Notifications"

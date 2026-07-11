@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArchiveIcon,
   BotIcon,
   BoxIcon,
   ChevronRightIcon,
@@ -14,11 +15,15 @@ import {
   LayersIcon,
   MemoryStickIcon,
   NetworkIcon,
+  PlayIcon,
+  RotateCwIcon,
   SearchIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SquareIcon,
   TerminalIcon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
 import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
@@ -36,7 +41,9 @@ import {
   DescriptionList,
 } from "@/components/ui/aurora/description-list";
 import { TooltipProvider } from "@/components/ui/aurora/tooltip";
+import { ToastProvider, useToast } from "@/components/ui/aurora/toast";
 import { GlowDot, PANEL, SUBPANEL } from "@/components/ui/aurora/panel-chrome";
+import { apiErrorMessage } from "@/lib/api-error-message";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
@@ -892,12 +899,78 @@ export function WorkspaceDashboard({
 }: {
   inventory: WorkspaceInventory;
 }) {
+  return (
+    <ToastProvider>
+      <DashboardShell inventory={inventory} />
+    </ToastProvider>
+  );
+}
+
+function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
+  const router = useRouter();
+  const { toast } = useToast();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(
     inventory.workspaces[0]?.id,
   );
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
+
+  async function dispatchLifecycle(
+    workspace: Workspace,
+    action: "start" | "stop" | "restart",
+  ) {
+    const label = action.charAt(0).toUpperCase() + action.slice(1);
+    try {
+      const response = await fetch(`/api/workspaces/${workspace.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "workspace action failed"));
+      }
+      toast({
+        status: "success",
+        title: `${label} dispatched`,
+        description: workspace.name,
+      });
+      router.refresh();
+    } catch (error) {
+      toast({
+        status: "error",
+        title: `${label} failed`,
+        description:
+          error instanceof Error ? error.message : "workspace action failed",
+      });
+    }
+  }
+
+  async function dispatchSnapshot(workspace: Workspace) {
+    try {
+      const response = await fetch(`/api/workspaces/${workspace.id}/snapshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(apiErrorMessage(body, "snapshot failed"));
+      }
+      toast({
+        status: "success",
+        title: "Snapshot created",
+        description: body.snapshot?.name ?? workspace.name,
+      });
+    } catch (error) {
+      toast({
+        status: "error",
+        title: "Snapshot failed",
+        description: error instanceof Error ? error.message : "snapshot failed",
+      });
+    }
+  }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -933,6 +1006,38 @@ export function WorkspaceDashboard({
           accent: "var(--aurora-accent-primary)",
           run: () => setActiveTab(tab.id),
         }))
+      : []),
+    ...(primaryWorkspace
+      ? lifecycleActionsFor(primaryWorkspace.state).map((action) => ({
+          id: `action:${action}`,
+          title: `${capitalize(action)} workspace`,
+          sub: `Dispatch ${action} for ${primaryWorkspace.name}`,
+          kind: "action",
+          icon:
+            action === "start"
+              ? PlayIcon
+              : action === "stop"
+                ? SquareIcon
+                : RotateCwIcon,
+          accent:
+            action === "stop"
+              ? "var(--aurora-warn)"
+              : "var(--aurora-accent-primary)",
+          run: () => void dispatchLifecycle(primaryWorkspace, action),
+        }))
+      : []),
+    ...(primaryWorkspace
+      ? [
+          {
+            id: "action:snapshot",
+            title: "Create snapshot",
+            sub: `Snapshot ${primaryWorkspace.name} now`,
+            kind: "action",
+            icon: ArchiveIcon,
+            accent: "var(--aurora-accent-pink)",
+            run: () => void dispatchSnapshot(primaryWorkspace),
+          },
+        ]
       : []),
     ...(primaryWorkspace?.terminalUrl
       ? [
@@ -998,4 +1103,20 @@ export function WorkspaceDashboard({
 
 function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
   return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+}
+
+function lifecycleActionsFor(
+  state: WorkspaceState,
+): Array<"start" | "stop" | "restart"> {
+  if (state === "running" || state === "degraded" || state === "setting_up") {
+    return ["restart", "stop"];
+  }
+  if (state === "stopped" || state === "failed") {
+    return ["start"];
+  }
+  return [];
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }

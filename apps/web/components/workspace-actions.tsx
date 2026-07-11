@@ -11,19 +11,19 @@ import {
   TooltipTrigger,
 } from "@/components/ui/aurora/tooltip";
 import { ToolbarGroup } from "@/components/ui/aurora/toolbar";
+import { useToast } from "@/components/ui/aurora/toast";
 import type { Workspace, WorkspaceState } from "@/lib/workspaces/types";
 
 type WorkspaceAction = "start" | "stop" | "restart";
 
 export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [pendingAction, setPendingAction] = React.useState<WorkspaceAction>();
-  const [error, setError] = React.useState<string>();
   const [isPending, startTransition] = React.useTransition();
 
   async function runAction(action: WorkspaceAction) {
     setPendingAction(action);
-    setError(undefined);
     try {
       const response = await fetch(`/api/workspaces/${workspace.id}/actions`, {
         method: "POST",
@@ -40,15 +40,23 @@ export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
           "workspace action failed";
         throw new Error(message);
       }
+      toast({
+        status: "success",
+        title: `${labelForAction(action)} dispatched`,
+        description: workspace.name,
+      });
       startTransition(() => {
         router.refresh();
       });
     } catch (actionError) {
-      setError(
-        actionError instanceof Error
-          ? actionError.message
-          : "workspace action failed",
-      );
+      toast({
+        status: "error",
+        title: `${labelForAction(action)} failed`,
+        description:
+          actionError instanceof Error
+            ? actionError.message
+            : "workspace action failed",
+      });
     } finally {
       setPendingAction(undefined);
     }
@@ -115,11 +123,6 @@ export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
           )}
         </ToolbarGroup>
       </div>
-      {error ? (
-        <p className="aurora-text-meta max-w-md text-right text-[var(--aurora-error)]">
-          {error}
-        </p>
-      ) : null}
     </div>
   );
 }

@@ -60,6 +60,13 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
   const [lastUpdated, setLastUpdated] = React.useState(() => Date.now());
   const [polling, setPolling] = React.useState(false);
   const [error, setError] = React.useState<string>();
+  // Prefer the push stream; fall back to interval polling where EventSource
+  // is unavailable (jsdom, very old browsers) or once the stream errors.
+  const [transport, setTransport] = React.useState<"sse" | "poll">(() =>
+    typeof window !== "undefined" && typeof window.EventSource !== "undefined"
+      ? "sse"
+      : "poll",
+  );
 
   // No re-seed-on-identity-change logic here: the caller mounts one
   // `WorkspacePane` per workspace keyed by `${workspace.id}:${createdAt}`
@@ -107,7 +114,57 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
     }
   }, [workspace.id]);
 
+  // Live push transport: the status/events SSE route emits a `status` frame
+  // every few seconds server-side, so the dashboard reflects lifecycle
+  // changes without client-side polling. Application-level `error` frames
+  // (provisioner op failures) surface as telemetry errors; a transport-level
+  // failure downgrades to the polling path below for the rest of the session.
   React.useEffect(() => {
+    if (transport !== "sse") return;
+    if (!isLiveState(workspace.state)) return;
+
+    const source = new EventSource(`/api/workspaces/${workspace.id}/status/events`);
+    const onStatus = (event: MessageEvent) => {
+      try {
+        const next = JSON.parse(event.data) as Workspace;
+        setWorkspace(next);
+        setHistory((current) =>
+          [...current, sampleFrom(next)].slice(-HISTORY_LENGTH),
+        );
+        setLastUpdated(Date.now());
+        setError(undefined);
+      } catch {
+        // Malformed frame — keep the stream, wait for the next one.
+      }
+    };
+    const onErrorFrame = (event: Event) => {
+      const data = (event as MessageEvent).data;
+      if (typeof data === "string") {
+        // Server-sent application error frame (provisioner op failed).
+        try {
+          setError(
+            JSON.parse(data)?.message ?? "failed to refresh workspace telemetry",
+          );
+        } catch {
+          setError("failed to refresh workspace telemetry");
+        }
+        return;
+      }
+      // Transport failure — close and downgrade to polling.
+      source.close();
+      setTransport("poll");
+    };
+    source.addEventListener("status", onStatus);
+    source.addEventListener("error", onErrorFrame);
+    return () => {
+      source.removeEventListener("status", onStatus);
+      source.removeEventListener("error", onErrorFrame);
+      source.close();
+    };
+  }, [transport, workspace.id, workspace.state]);
+
+  React.useEffect(() => {
+    if (transport !== "poll") return;
     if (!isLiveState(workspace.state)) return;
 
     // Pause polling while the tab is hidden — modern browsers throttle but
@@ -139,7 +196,7 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
       stop();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [poll, workspace.state]);
+  }, [poll, transport, workspace.state]);
 
   return { workspace, history, lastUpdated, polling, error };
 }
