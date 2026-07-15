@@ -1,6 +1,6 @@
 {
-  "updatedAt": "2026-07-06T21:15:13.434Z",
-  "command": "init",
-  "gitHead": "74c465a58c71345d99689ff0b077cd2be3f4bb09",
-  "model": "claude-opus-4.8"
+  "updatedAt": "2026-07-15T08:46:53.984Z",
+  "command": "update",
+  "gitHead": "d4d18527ba049997ecfa59188eb828d82aa2ee5c",
+  "model": "gpt-5.3-codex-spark"
 }
