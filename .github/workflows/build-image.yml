@@ -225,5 +225,13 @@ jobs:
             --title "$RELEASE_TITLE" \
             --notes-file "$release_notes"
 
-          git tag -f incus-web-agent-latest "$GITHUB_SHA"
-          git push -f origin incus-web-agent-latest
+          latest_ref="tags/incus-web-agent-latest"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/${latest_ref}" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/${latest_ref}" \
+              -f sha="$GITHUB_SHA" \
+              -F force=true >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/${latest_ref}" \
+              -f sha="$GITHUB_SHA" >/dev/null
+          fi
