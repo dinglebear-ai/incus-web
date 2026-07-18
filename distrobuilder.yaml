@@ -84,6 +84,7 @@ packages:
         - jq
         - libssl-dev
         - netcat-openbsd
+        - pipx
         - pkg-config
         - python3
         - python3-pip

@@ -208,6 +208,7 @@ require_literal "incus_cmd config device override \"\$CONTAINER_NAME\" workspace
 require_literal "incus_cmd start \"\$CONTAINER_NAME\""
 require_literal "CONTAINER_PACKAGES_PREINSTALLED=\"\${CONTAINER_PACKAGES_PREINSTALLED:-0}\""
 require_literal "required preinstalled command is missing"
+require_literal "pipx"
 require_literal "if [[ \"\${BASH_SOURCE[0]}\" == \"\$0\" ]]; then"
 require_literal "INCUS_WEB_LIB_URL="
 require_literal "INCUS_WEB_SOURCE_REF="
@@ -527,6 +528,7 @@ for needle in \
   "build-essential" \
   "zsh" \
   "golang-go" \
+  "pipx" \
   "rustc" \
   'node_version="22.17.0"' \
   "npm install -g @anthropic-ai/claude-code@2.1.212" \
