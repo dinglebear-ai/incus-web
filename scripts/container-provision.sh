@@ -17,7 +17,7 @@ if ! id -u "$WEB_USER" >/dev/null 2>&1; then
   useradd -m -s /usr/bin/zsh "$WEB_USER"
 fi
 usermod -s /usr/bin/zsh "$WEB_USER"
-install -d "$CONTAINER_WORKSPACE"
+mkdir -p "$CONTAINER_WORKSPACE"
 if ! chown "$WEB_USER:$WEB_USER" "$CONTAINER_WORKSPACE"; then
   if ! runuser -u "$WEB_USER" -- test -w "$CONTAINER_WORKSPACE"; then
     printf 'workspace mount is neither chownable nor writable by %s: %s\n' "$WEB_USER" "$CONTAINER_WORKSPACE" >&2
