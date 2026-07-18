@@ -213,6 +213,15 @@ require_literal "INCUS_WEB_SOURCE_REF="
 require_literal 'INCUS_WEB_RAW_BASE="https://raw.githubusercontent.com/jmagar/incus-web/$INCUS_WEB_SOURCE_REF"'
 require_literal "curl -fsSL \"\$INCUS_WEB_LIB_URL\" -o \"\$INCUS_WEB_LIB_TMP\""
 
+bootstrap_env="$(mktemp)"
+trap 'rm -f "$bootstrap_env"' EXIT
+printf 'INCUS_WEB_SOURCE_REF=%s\n' '0123456789abcdef0123456789abcdef01234567' >"$bootstrap_env"
+loaded_ref="$(ENV_FILE="$bootstrap_env" bash -c 'source "$1/deploy.sh" >/dev/null; printf "%s" "$INCUS_WEB_SOURCE_REF"' _ "$root")"
+if [[ "$loaded_ref" != "0123456789abcdef0123456789abcdef01234567" ]]; then
+  printf 'deploy.sh did not load INCUS_WEB_SOURCE_REF from ENV_FILE before validation\n' >&2
+  exit 1
+fi
+
 if ! grep -Fq -- "INCUS_WEB_PROVISIONER_TOKEN" "$root/apps/web/lib/provisioner/host-transport.ts"; then
   printf 'missing expected host transport token config\n' >&2
   exit 1

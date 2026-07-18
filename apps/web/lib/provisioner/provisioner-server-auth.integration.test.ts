@@ -244,6 +244,88 @@ describe("provisioner-server requireServiceAuth (integration)", () => {
   });
 });
 
+describe("provisioner-server email owner policy (integration)", () => {
+  let tempDir: string;
+  let socketPath: string;
+  let child: ChildProcess;
+
+  beforeAll(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "incus-web-provisioner-email-owner-"));
+    socketPath = join(tempDir, "provisioner.sock");
+    child = spawn(
+      process.execPath,
+      [join(currentDir, "../../../../scripts/provisioner-server.mjs")],
+      {
+        env: {
+          ...process.env,
+          INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
+          INCUS_WEB_PROVISIONER_SOCKET: socketPath,
+          INCUS_WEB_PROVISIONER_HOST: "",
+          INCUS_WEB_PROVISIONER_PORT: "0",
+          INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
+          INCUS_WEB_CODEX_APP_SERVER_URL: "",
+          INCUS_WEB_WORKSPACE_OWNER_SUBJECT: "",
+          INCUS_WEB_WORKSPACE_OWNER_EMAIL: "owner@example.com",
+          INCUS_WEB_INCUS_CONTAINER: "ws-email-owner-integration-test-does-not-exist",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    await waitForSocket(socketPath);
+  }, 30000);
+
+  afterAll(async () => {
+    child?.kill();
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  function emailOwnerCommand(email = "owner@example.com") {
+    return {
+      ...validCommand(
+        "GetWorkspaceStatus",
+        {},
+        email === "owner@example.com" ? "email-owner-valid" : "email-owner-mismatch",
+      ),
+      actor: {
+        userId: "oidc:stable-provider-subject",
+        oidcSubject: "stable-provider-subject",
+        email,
+      },
+      workspace: {
+        id: "workspace-incus-web",
+        ownerUserId: "oidc:owner@example.com",
+        incusProject: "default",
+        incusContainer: "ws-email-owner-integration-test-does-not-exist",
+      },
+    };
+  }
+
+  it("authorizes an email-owned workspace when the actor uses a stable non-email subject", async () => {
+    const response = await postOperations(
+      socketPath,
+      `Bearer ${TOKEN}`,
+      emailOwnerCommand(),
+    );
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "incus_unavailable" },
+    });
+  });
+
+  it("rejects an actor whose email does not match the configured owner", async () => {
+    const response = await postOperations(
+      socketPath,
+      `Bearer ${TOKEN}`,
+      emailOwnerCommand("attacker@example.com"),
+    );
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "metadata_mismatch" },
+    });
+  });
+});
+
 function validCommand(type: string, payload: unknown, requestId: string) {
   return {
     version: "provisioner.v1",

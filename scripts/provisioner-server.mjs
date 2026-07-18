@@ -273,17 +273,21 @@ function validateWorkspace(command) {
       false,
     );
   }
-  if (command.workspace.ownerUserId !== command.actor.userId) {
-    return error(
-      "metadata_mismatch",
-      "workspace owner did not match the authenticated actor tuple",
-      false,
-    );
-  }
   const configuredSubject = process.env.INCUS_WEB_WORKSPACE_OWNER_SUBJECT?.trim();
   const configuredEmail = process.env.INCUS_WEB_WORKSPACE_OWNER_EMAIL?.trim().toLowerCase();
+  const expectedConfiguredOwner = configuredSubject
+    ? `oidc:${configuredSubject}`
+    : configuredEmail
+      ? `oidc:${configuredEmail}`
+      : undefined;
+  const actorMatchesConfiguredOwner = configuredSubject
+    ? command.actor.userId === expectedConfiguredOwner
+    : configuredEmail
+      ? command.actor.email.toLowerCase() === configuredEmail
+      : command.workspace.ownerUserId === command.actor.userId;
   if (
-    (configuredSubject && command.workspace.ownerUserId !== `oidc:${configuredSubject}`) ||
+    (expectedConfiguredOwner && command.workspace.ownerUserId !== expectedConfiguredOwner) ||
+    !actorMatchesConfiguredOwner ||
     (configuredEmail && command.actor.email.toLowerCase() !== configuredEmail)
   ) {
     return error("metadata_mismatch", "workspace owner did not match host owner policy", false);

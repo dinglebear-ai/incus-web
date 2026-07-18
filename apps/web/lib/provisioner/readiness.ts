@@ -1,4 +1,5 @@
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 
 import { hostProvisionerConfigFromEnv } from "./host-transport";
 
@@ -13,7 +14,22 @@ export async function provisionerReadiness(): Promise<{
   const started = performance.now();
   try {
     await new Promise<void>((resolve, reject) => {
-      const body = "{}";
+      const probeId = `readiness-${randomUUID()}`;
+      const probeType = "ReadinessProbe";
+      const probeWorkspaceId = "readiness";
+      const body = JSON.stringify({
+        version: "provisioner.v1",
+        requestId: probeId,
+        type: probeType,
+        actor: { userId: "readiness", oidcSubject: "readiness", email: "readiness@localhost" },
+        workspace: {
+          id: probeWorkspaceId,
+          ownerUserId: "readiness",
+          incusProject: "readiness",
+          incusContainer: "readiness",
+        },
+        payload: {},
+      });
       const url = config.url ? new URL(config.url) : undefined;
       const request = http.request(
         {
@@ -32,15 +48,46 @@ export async function provisionerReadiness(): Promise<{
           },
         },
         (response) => {
-          response.resume();
+          const chunks: Buffer[] = [];
+          let size = 0;
+          response.once("error", reject);
+          response.on("data", (chunk: Buffer) => {
+            size += chunk.length;
+            if (size > 64 * 1024) {
+              response.destroy(new Error("provisioner readiness response exceeded 64 KiB"));
+              return;
+            }
+            chunks.push(chunk);
+          });
           response.once("end", () => {
             const status = response.statusCode ?? 500;
-            // A schema error proves the authenticated server handled the
-            // request. Authentication and server failures do not prove ready.
-            if (status === 401 || status === 403 || status >= 500) {
-              reject(new Error(`provisioner returned ${status}`));
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            } catch {
+              reject(new Error(`provisioner returned a non-contract response (${status})`));
+              return;
             }
-            else resolve();
+            const contractResponse = parsed as {
+              requestId?: unknown;
+              type?: unknown;
+              workspaceId?: unknown;
+              status?: unknown;
+              error?: { code?: unknown; retryable?: unknown };
+            };
+            if (
+              status !== 200 ||
+              contractResponse.requestId !== probeId ||
+              contractResponse.type !== probeType ||
+              contractResponse.workspaceId !== probeWorkspaceId ||
+              contractResponse.status !== "failed" ||
+              contractResponse.error?.code !== "invalid_input" ||
+              contractResponse.error.retryable !== false
+            ) {
+              reject(new Error(`provisioner returned a non-contract response (${status})`));
+              return;
+            }
+            resolve();
           });
         },
       );

@@ -3,6 +3,19 @@ set -euo pipefail
 
 INCUS_WEB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 INCUS_WEB_LIB="$INCUS_WEB_ROOT/scripts/incus-web-lib.sh"
+
+# The immutable source ref controls every remote fallback URL, so load the
+# deployment env before deriving or validating it. This also supports the
+# documented curl-piped/non-git deployment path where git cannot supply HEAD.
+INCUS_WEB_BOOTSTRAP_ENV_FILE="${ENV_FILE:-.env}"
+if [[ -f "$INCUS_WEB_BOOTSTRAP_ENV_FILE" ]]; then
+  printf '[incus-web] loading %s\n' "$INCUS_WEB_BOOTSTRAP_ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  . "$INCUS_WEB_BOOTSTRAP_ENV_FILE"
+  set +a
+  INCUS_WEB_BOOTSTRAP_ENV_LOADED=1
+fi
 INCUS_WEB_SOURCE_REF="${INCUS_WEB_SOURCE_REF:-$(git -C "$INCUS_WEB_ROOT" rev-parse HEAD 2>/dev/null || true)}"
 if [[ ! "$INCUS_WEB_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
   printf '[incus-web] error: INCUS_WEB_SOURCE_REF must be an immutable 40-character commit SHA\n' >&2
@@ -22,7 +35,7 @@ else
 fi
 
 main() {
-  load_env
+  [[ "${INCUS_WEB_BOOTSTRAP_ENV_LOADED:-0}" == "1" ]] || load_env
 
   CONTAINER_NAME="${CONTAINER_NAME:-incus-web}"
   IMAGE="${IMAGE:-images:debian/trixie}"
