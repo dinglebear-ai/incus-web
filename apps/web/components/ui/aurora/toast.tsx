@@ -308,6 +308,7 @@ export function ToastProvider({ children, position = "top-right" }: ToastProvide
     mounted
       ? createPortal(
           <div
+            role="region"
             aria-label="Notifications"
             className={cn("pointer-events-none z-[9999] flex flex-col gap-2.5", POSITION_CLASS[position])}
             style={{ maxWidth: 400 }}
