@@ -24,6 +24,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 | `INCUS_NETWORK_IPV4` | `198.18.0.1/15` | Bridge subnet |
 | `INCUS_ACL` | `agent-block-lan` | Network ACL name |
 | `ENABLE_NETWORK_ACL` | `1` | Enable RFC1918 blocking |
+| `VALIDATE_INTERNET_EGRESS` | `1` | Require the post-deploy public egress probe; isolated CI may disable only this probe |
 
 ### Access Mode
 

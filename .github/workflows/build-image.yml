@@ -138,6 +138,7 @@ jobs:
           HOST_WORKSPACE: ${{ runner.temp }}/incus-web-default-path-workspace
           IMAGE: incus-web-agent-smoke
           CONTAINER_PACKAGES_PREINSTALLED: "1"
+          VALIDATE_INTERNET_EGRESS: "0"
           DISK_SHIFT: "false"
           ENABLE_HOST_PROVISIONER: "0"
           ENABLE_HOST_WEB_APP: "0"

@@ -45,6 +45,7 @@ main() {
   INCUS_NETWORK_IPV4="${INCUS_NETWORK_IPV4:-198.18.0.1/15}"
   INCUS_ACL="${INCUS_ACL:-agent-block-lan}"
   ENABLE_NETWORK_ACL="${ENABLE_NETWORK_ACL:-1}"
+  VALIDATE_INTERNET_EGRESS="${VALIDATE_INTERNET_EGRESS:-1}"
   INCUS_PROFILE_NAME="${INCUS_PROFILE_NAME:-incus-web-agent}"
   INCUS_PROFILE_YAML="${INCUS_PROFILE_YAML:-$SCRIPT_DIR/incus-web-profile.yaml}"
   INCUS_PROFILE_URL="${INCUS_PROFILE_URL:-$INCUS_WEB_RAW_BASE/incus-web-profile.yaml}"
@@ -211,6 +212,13 @@ main() {
       ;;
     *)
       die "CONTAINER_PACKAGES_PREINSTALLED must be 0 or 1"
+      ;;
+  esac
+  case "$VALIDATE_INTERNET_EGRESS" in
+    0|1)
+      ;;
+    *)
+      die "VALIDATE_INTERNET_EGRESS must be 0 or 1"
       ;;
   esac
 

@@ -1945,7 +1945,11 @@ validate_container() {
       fi
       ;;
   esac
-  agent_check "nc -vz -w 5 1.1.1.1 443"
+  if [[ "$VALIDATE_INTERNET_EGRESS" == "1" ]]; then
+    agent_check "nc -vz -w 5 1.1.1.1 443"
+  else
+    log "skipping Internet egress probe; LAN isolation checks remain enabled"
+  fi
   expect_blocked_lan 10.0.0.1 80
   expect_blocked_lan 172.16.0.1 80
   expect_blocked_lan 192.168.0.1 80

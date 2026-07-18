@@ -184,6 +184,8 @@ for needle in \
   fi
 done
 require_literal "nc -vz -w 5 1.1.1.1 443"
+require_literal "VALIDATE_INTERNET_EGRESS"
+require_literal "LAN isolation checks remain enabled"
 require_literal "expect_blocked_lan 10.0.0.1 80"
 require_literal "expect_blocked_lan 172.16.0.1 80"
 require_literal "expect_blocked_lan 192.168.0.1 80"
