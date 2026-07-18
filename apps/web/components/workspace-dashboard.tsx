@@ -950,6 +950,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
   );
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [liveWorkspaces, setLiveWorkspaces] = useState<
     Record<string, Workspace>
   >({});
@@ -998,6 +999,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
         title: "Snapshot created",
         description: result.value.snapshot?.name ?? workspace.name,
       });
+      setSnapshotRevision((current) => current + 1);
     } catch (error) {
       toast({
         status: "error",
@@ -1113,7 +1115,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
               {workspaces.length > 0 ? (
                 primaryWorkspace ? (
                   <WorkspacePane
-                    key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
+                    key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}:${snapshotRevision}`}
                     workspace={primaryWorkspace}
                     activeTab={activeTab}
                     setActiveTab={setActiveTab}

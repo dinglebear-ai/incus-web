@@ -346,6 +346,38 @@ describe("WorkspaceDashboard", () => {
     });
     expect(await screen.findByText("Saved")).toBeInTheDocument();
   });
+
+  it("refreshes a mounted snapshot list after palette snapshot creation", async () => {
+    let snapshotListCalls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith("/snapshots") && init?.method === "POST") {
+        return okResponse({ ok: true, snapshot: { name: "palette-snapshot" } });
+      }
+      if (target.endsWith("/snapshots")) {
+        snapshotListCalls += 1;
+        return okResponse({ ok: true, snapshots: [] });
+      }
+      if (target.endsWith("/activity")) return okResponse({ ok: true, activity: [] });
+      return okResponse({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<WorkspaceDashboard inventory={inventory} />);
+    fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
+    await waitFor(() => expect(snapshotListCalls).toBe(1));
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.change(
+      await screen.findByRole("textbox", {
+        name: "Search workspaces, tools, and actions",
+      }),
+      { target: { value: "snapshot" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /create snapshot/i }));
+
+    await waitFor(() => expect(snapshotListCalls).toBe(2));
+  });
 });
 
 function okResponse(body: unknown) {
