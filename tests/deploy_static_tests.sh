@@ -531,6 +531,10 @@ for needle in \
     exit 1
   fi
 done
+if ! grep -A8 -F -- "trigger: post-files" "$definition" | grep -Fq -- "systemctl enable wetty.service"; then
+  printf 'wetty must be enabled after its unit file is injected\n' >&2
+  exit 1
+fi
 
 # shellcheck disable=SC2016
 for needle in \

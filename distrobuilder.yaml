@@ -195,11 +195,18 @@ actions:
         npm install -g @openai/codex@0.144.3
       fi
 
-      systemctl enable wetty.service
-      systemctl enable tailscaled.service
-
       rm -rf /etc/incus-web /tmp/* /var/tmp/*
       rm -f /root/.bash_history /home/*/.bash_history
       apt-get clean
       rm -rf /var/lib/apt/lists/*
       find /var/log -type f -exec truncate -s 0 {} + 2>/dev/null || true
+
+  # Distrobuilder renders `files:` after the package hook. Enable units only
+  # after wetty.service has been injected; tailscaled.service was installed by
+  # the package hook and is enabled here alongside it.
+  - trigger: post-files
+    action: |-
+      #!/bin/sh
+      set -eu
+      systemctl enable wetty.service
+      systemctl enable tailscaled.service
