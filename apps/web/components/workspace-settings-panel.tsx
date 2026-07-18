@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/aurora/panel-chrome";
 import { GoldenConfigImport } from "@/components/golden-config-import";
 import { apiErrorMessage } from "@/lib/api-error-message";
+import { createWorkspaceSnapshot } from "@/lib/workspaces/mutations";
 import type { Workspace } from "@/lib/workspaces/types";
 
 export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) {
@@ -99,15 +100,9 @@ export function WorkspaceSettingsPanel({ workspace }: { workspace: Workspace }) 
     setPending("createSnapshot");
     resetActionState("createSnapshot");
     try {
-      const response = await fetch(`/api/workspaces/${workspace.id}/snapshots`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: snapshotName.trim() || undefined }),
-      });
-      const body = await response.json().catch(() => undefined);
-      if (!response.ok || body?.ok !== true) {
-        throw new Error(apiErrorMessage(body, "snapshot failed"));
-      }
+      const result = await createWorkspaceSnapshot(workspace.id, snapshotName.trim());
+      if (!result.started) return;
+      const body = result.value;
       setStatus((current) => ({ ...current, createSnapshot: "Snapshot created" }));
       setSnapshotName("");
       if (body.snapshot) setSnapshots((current) => [body.snapshot, ...current].slice(0, 8));

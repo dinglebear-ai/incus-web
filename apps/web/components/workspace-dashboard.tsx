@@ -26,7 +26,14 @@ import {
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { LucideIcon } from "lucide-react";
-import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 import {
   CommandPalette,
@@ -43,7 +50,13 @@ import {
 import { TooltipProvider } from "@/components/ui/aurora/tooltip";
 import { ToastProvider, useToast } from "@/components/ui/aurora/toast";
 import { GlowDot, PANEL, SUBPANEL } from "@/components/ui/aurora/panel-chrome";
-import { apiErrorMessage } from "@/lib/api-error-message";
+import {
+  createWorkspaceSnapshot,
+  dispatchWorkspaceLifecycle,
+  lifecycleActionLabel,
+  lifecycleActionsFor,
+  type WorkspaceLifecycleAction,
+} from "@/lib/workspaces/mutations";
 import { StatusIndicator } from "@/components/ui/aurora/status-indicator";
 import { WorkspaceDetailsPanel } from "@/components/workspace-details-panel";
 import { WorkspaceActions } from "@/components/workspace-actions";
@@ -226,6 +239,23 @@ function sectionToneColor(tone: "cyan" | "rose" | "success") {
     case "cyan":
       return "var(--aurora-accent-primary)";
   }
+}
+
+function utilizationPercent(
+  used: number | undefined,
+  limit: number | undefined,
+) {
+  if (
+    used === undefined ||
+    limit === undefined ||
+    !Number.isFinite(used) ||
+    !Number.isFinite(limit) ||
+    limit <= 0
+  ) {
+    return undefined;
+  }
+
+  return Math.min(100, Math.max(0, (used / limit) * 100));
 }
 
 /* ── App shell: sidebar ────────────────────────────────────────────────── */
@@ -598,10 +628,10 @@ function WorkspaceTelemetryPanel({
   const cpuPercent = history.at(-1)?.cpuPercent;
   const memoryPercent = history.at(-1)?.memoryPercent;
   const { rootDiskUsedBytes, rootDiskLimitBytes } = workspace.metrics;
-  const storagePercent =
-    rootDiskUsedBytes !== undefined && rootDiskLimitBytes
-      ? (rootDiskUsedBytes / rootDiskLimitBytes) * 100
-      : undefined;
+  const storagePercent = utilizationPercent(
+    rootDiskUsedBytes,
+    rootDiskLimitBytes,
+  );
 
   return (
     <section className="space-y-3">
@@ -819,14 +849,20 @@ function WorkspacePane({
   workspace: seed,
   activeTab,
   setActiveTab,
+  onWorkspaceUpdate,
 }: {
   workspace: Workspace;
   activeTab: WorkspaceTab;
   setActiveTab: (tab: WorkspaceTab) => void;
+  onWorkspaceUpdate: (workspace: Workspace) => void;
 }) {
   const { workspace, history, lastUpdated, polling, error } =
     useWorkspaceTelemetry(seed);
   const live = isLiveState(workspace.state);
+
+  useEffect(() => {
+    onWorkspaceUpdate(workspace);
+  }, [onWorkspaceUpdate, workspace]);
 
   return (
     <div className="grid min-w-0 gap-4">
@@ -914,23 +950,29 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
   );
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const primaryWorkspace = activeWorkspace(inventory.workspaces, activeWorkspaceId);
+  const [liveWorkspaces, setLiveWorkspaces] = useState<
+    Record<string, Workspace>
+  >({});
+  const workspaces = inventory.workspaces.map(
+    (workspace) => liveWorkspaces[workspace.id] ?? workspace,
+  );
+  const primaryWorkspace = activeWorkspace(workspaces, activeWorkspaceId);
+
+  const handleWorkspaceUpdate = useCallback((workspace: Workspace) => {
+    setLiveWorkspaces((current) => {
+      if (current[workspace.id] === workspace) return current;
+      return { ...current, [workspace.id]: workspace };
+    });
+  }, []);
 
   async function dispatchLifecycle(
     workspace: Workspace,
-    action: "start" | "stop" | "restart",
+    action: WorkspaceLifecycleAction,
   ) {
-    const label = action.charAt(0).toUpperCase() + action.slice(1);
+    const label = lifecycleActionLabel(action);
     try {
-      const response = await fetch(`/api/workspaces/${workspace.id}/actions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      const body = await response.json().catch(() => undefined);
-      if (!response.ok || body?.ok !== true) {
-        throw new Error(apiErrorMessage(body, "workspace action failed"));
-      }
+      const result = await dispatchWorkspaceLifecycle(workspace.id, action);
+      if (!result.started) return;
       toast({
         status: "success",
         title: `${label} dispatched`,
@@ -949,19 +991,12 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
 
   async function dispatchSnapshot(workspace: Workspace) {
     try {
-      const response = await fetch(`/api/workspaces/${workspace.id}/snapshots`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const body = await response.json().catch(() => undefined);
-      if (!response.ok || body?.ok !== true) {
-        throw new Error(apiErrorMessage(body, "snapshot failed"));
-      }
+      const result = await createWorkspaceSnapshot(workspace.id);
+      if (!result.started) return;
       toast({
         status: "success",
         title: "Snapshot created",
-        description: body.snapshot?.name ?? workspace.name,
+        description: result.value.snapshot?.name ?? workspace.name,
       });
     } catch (error) {
       toast({
@@ -984,7 +1019,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
   }, []);
 
   const paletteItems: CommandPaletteItem[] = [
-    ...inventory.workspaces.map((workspace) => ({
+    ...workspaces.map((workspace) => ({
       id: `workspace:${workspace.id}`,
       title: workspace.name,
       sub: `${workspace.incusProject} / ${workspace.incusContainer} · ${workspace.state.replaceAll("_", " ")}`,
@@ -1010,7 +1045,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
     ...(primaryWorkspace
       ? lifecycleActionsFor(primaryWorkspace.state).map((action) => ({
           id: `action:${action}`,
-          title: `${capitalize(action)} workspace`,
+          title: `${lifecycleActionLabel(action)} workspace`,
           sub: `Dispatch ${action} for ${primaryWorkspace.name}`,
           kind: "action",
           icon:
@@ -1058,7 +1093,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
     <main className="aurora-page-shell flex min-h-screen text-[var(--aurora-text-primary)]">
       <TooltipProvider>
         <WorkspaceSidebar
-          workspaces={inventory.workspaces}
+          workspaces={workspaces}
           activeWorkspaceId={primaryWorkspace?.id}
           onSelect={(id) => {
             setActiveWorkspaceId(id);
@@ -1075,13 +1110,14 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
 
           <div className="min-w-0 flex-1 overflow-x-hidden">
             <div className="mx-auto w-full max-w-[1240px] px-4 py-5 md:px-7 md:py-6">
-              {inventory.workspaces.length > 0 ? (
+              {workspaces.length > 0 ? (
                 primaryWorkspace ? (
                   <WorkspacePane
                     key={`${primaryWorkspace.id}:${primaryWorkspace.createdAt}`}
                     workspace={primaryWorkspace}
                     activeTab={activeTab}
                     setActiveTab={setActiveTab}
+                    onWorkspaceUpdate={handleWorkspaceUpdate}
                   />
                 ) : null
               ) : (
@@ -1103,20 +1139,4 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
 
 function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
   return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
-}
-
-function lifecycleActionsFor(
-  state: WorkspaceState,
-): Array<"start" | "stop" | "restart"> {
-  if (state === "running" || state === "degraded" || state === "setting_up") {
-    return ["restart", "stop"];
-  }
-  if (state === "stopped" || state === "failed") {
-    return ["start"];
-  }
-  return [];
-}
-
-function capitalize(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

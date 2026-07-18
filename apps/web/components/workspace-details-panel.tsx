@@ -15,24 +15,18 @@ import {
   PANEL_HEADER,
   SUBPANEL,
 } from "@/components/ui/aurora/panel-chrome";
+import { useWorkspaceActivity } from "@/components/use-workspace-activity";
 import { apiErrorMessage } from "@/lib/api-error-message";
 import type { Workspace } from "@/lib/workspaces/types";
 
 export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
   const [loadError, setLoadError] = useState<string>();
-  const [activity, setActivity] = useState<Array<{ at: string; action: string; actorEmail: string; status: string }>>([]);
+  const { entries: activity, error: activityError } = useWorkspaceActivity(workspace.id, 8);
   const [snapshots, setSnapshots] = useState<Array<{ name: string; createdAt?: string }>>([]);
 
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void fetchNoStore(`/api/workspaces/${workspace.id}/activity`, controller.signal).then((body) => {
-        if (Array.isArray(body?.activity)) setActivity(body.activity.slice(0, 8));
-      }).catch((error) => {
-        if (!controller.signal.aborted) {
-          setLoadError(error instanceof Error ? error.message : "failed to load activity");
-        }
-      });
       void fetchNoStore(`/api/workspaces/${workspace.id}/snapshots`, controller.signal).then((body) => {
         if (Array.isArray(body?.snapshots)) setSnapshots(body.snapshots.slice(0, 8));
       }).catch((error) => {
@@ -119,8 +113,8 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
         )}
       </section>
 
-      {loadError ? (
-        <Banner tone="error" kind="tag" title="Inspector data failed" description={loadError} />
+      {loadError || activityError ? (
+        <Banner tone="error" kind="tag" title="Inspector data failed" description={loadError ?? activityError} />
       ) : null}
       </div>
     </aside>

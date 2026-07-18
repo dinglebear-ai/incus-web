@@ -1,52 +1,13 @@
 "use client";
 
 import { ActivityIcon } from "lucide-react";
-import { useEffect, useState } from "react";
 
 import { GlowDot, PANEL, PANEL_HEADER } from "@/components/ui/aurora/panel-chrome";
-import { apiErrorMessage } from "@/lib/api-error-message";
+import { useWorkspaceActivity } from "@/components/use-workspace-activity";
 import type { Workspace } from "@/lib/workspaces/types";
 
-type ActivityEntry = {
-  at: string;
-  action: string;
-  actorEmail: string;
-  status: string;
-};
-
 export function WorkspaceActivityRail({ workspace }: { workspace: Workspace }) {
-  const [entries, setEntries] = useState<ActivityEntry[]>([]);
-  const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      void fetch(`/api/workspaces/${workspace.id}/activity`, {
-        headers: { "Cache-Control": "no-store" },
-        signal: controller.signal,
-      })
-        .then(async (response) => {
-          const body = await response.json().catch(() => undefined);
-          if (!response.ok || body?.ok !== true) {
-            throw new Error(apiErrorMessage(body, "failed to load activity"));
-          }
-          if (Array.isArray(body.activity)) setEntries(body.activity.slice(0, 10));
-        })
-        .catch((loadError) => {
-          if (!controller.signal.aborted) {
-            setError(
-              loadError instanceof Error
-                ? loadError.message
-                : "failed to load activity",
-            );
-          }
-        });
-    }, 500);
-    return () => {
-      controller.abort();
-      window.clearTimeout(timer);
-    };
-  }, [workspace.id]);
+  const { entries, error } = useWorkspaceActivity(workspace.id, 10);
 
   return (
     <aside className={`${PANEL} overflow-hidden xl:sticky xl:top-4`}>
