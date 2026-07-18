@@ -12,6 +12,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 |----------|---------|-------------|
 | `CONTAINER_NAME` | `incus-web` | Incus container name |
 | `IMAGE` | `images:debian/trixie` | Base image |
+| `CONTAINER_PACKAGES_PREINSTALLED` | `0` | Verify and reuse a trusted prebuilt toolchain instead of installing packages |
 | `RECREATE` | `0` | Force recreation if set to 1 |
 | `HOST_WORKSPACE` | `$HOME/incus-web-data/$CONTAINER_NAME` | Host workspace directory |
 

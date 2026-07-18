@@ -39,6 +39,7 @@ main() {
 
   CONTAINER_NAME="${CONTAINER_NAME:-incus-web}"
   IMAGE="${IMAGE:-images:debian/trixie}"
+  CONTAINER_PACKAGES_PREINSTALLED="${CONTAINER_PACKAGES_PREINSTALLED:-0}"
   RECREATE="${FORCE_RECREATE:-${RECREATE:-0}}"
   INCUS_NETWORK="${INCUS_NETWORK:-agentbr0}"
   INCUS_NETWORK_IPV4="${INCUS_NETWORK_IPV4:-198.18.0.1/15}"
@@ -202,6 +203,14 @@ main() {
       ;;
     *)
       die "TERMINAL_BACKEND must be wetty or ghostty-web"
+      ;;
+  esac
+
+  case "$CONTAINER_PACKAGES_PREINSTALLED" in
+    0|1)
+      ;;
+    *)
+      die "CONTAINER_PACKAGES_PREINSTALLED must be 0 or 1"
       ;;
   esac
 

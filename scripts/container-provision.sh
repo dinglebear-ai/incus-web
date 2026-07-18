@@ -17,7 +17,14 @@ if ! id -u "$WEB_USER" >/dev/null 2>&1; then
   useradd -m -s /usr/bin/zsh "$WEB_USER"
 fi
 usermod -s /usr/bin/zsh "$WEB_USER"
-install -d -o "$WEB_USER" -g "$WEB_USER" "$CONTAINER_WORKSPACE"
+install -d "$CONTAINER_WORKSPACE"
+if ! chown "$WEB_USER:$WEB_USER" "$CONTAINER_WORKSPACE"; then
+  if ! runuser -u "$WEB_USER" -- test -w "$CONTAINER_WORKSPACE"; then
+    printf 'workspace mount is neither chownable nor writable by %s: %s\n' "$WEB_USER" "$CONTAINER_WORKSPACE" >&2
+    exit 1
+  fi
+  printf 'workspace mount ownership is fixed by the host; continuing because %s can write it\n' "$WEB_USER" >&2
+fi
 usermod -aG sudo "$WEB_USER"
 printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$WEB_USER" >/etc/sudoers.d/incus-web-user
 chmod 440 /etc/sudoers.d/incus-web-user

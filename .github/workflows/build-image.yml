@@ -127,13 +127,17 @@ jobs:
           # default, but use an unshifted disposable workspace for CI smoke.
           DISK_SHIFT: "false"
 
-      - name: Exercise default procedural deployment path
-        run: sudo -E ./deploy.sh
+      - name: Exercise prebuilt-image procedural deployment path
+        run: |
+          sudo install -d -m 0777 "$HOST_WORKSPACE"
+          sudo -E ./deploy.sh
         env:
           ACCESS_MODE: none
           INCUS_WEB_ALLOW_NO_ACCESS: "1"
           CONTAINER_NAME: incus-web-default-path-smoke
           HOST_WORKSPACE: ${{ runner.temp }}/incus-web-default-path-workspace
+          IMAGE: incus-web-agent-smoke
+          CONTAINER_PACKAGES_PREINSTALLED: "1"
           DISK_SHIFT: "false"
           ENABLE_HOST_PROVISIONER: "0"
           ENABLE_HOST_WEB_APP: "0"

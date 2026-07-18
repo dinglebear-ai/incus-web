@@ -1521,9 +1521,22 @@ provision_container() {
   fi
 
   log "installing container packages"
-  # This script is evaluated inside the container; keep expansions there.
-  # shellcheck disable=SC2016,SC2086
-  container_bash "$name" 'export DEBIAN_FRONTEND=noninteractive
+  if [[ "$CONTAINER_PACKAGES_PREINSTALLED" == "1" ]]; then
+    log "verifying preinstalled container packages"
+    # This script is evaluated inside the container; keep expansions there.
+    # shellcheck disable=SC2016
+    container_bash "$name" 'set -euo pipefail
+for command in cc cargo curl git go gpg jq nc node npm pipx pkg-config python3 rustc sudo unzip zip zsh gh claude wetty; do
+  command -v "$command" >/dev/null || {
+    printf "required preinstalled command is missing: %s\n" "$command" >&2
+    exit 1
+  }
+done'
+  else
+    # This script is evaluated inside the container; keep expansions there.
+    # shellcheck disable=SC2016,SC2086
+    container_bash "$name" 'set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
   build-essential \
@@ -1567,6 +1580,7 @@ fi
 if [[ "'"$TERMINAL_BACKEND"'" == "ghostty-web" ]] && ! npm list -g "@ghostty-web/demo@'"$GHOSTTY_WEB_DEMO_VERSION"'" >/dev/null 2>&1; then
   npm install -g @ghostty-web/demo@'"$GHOSTTY_WEB_DEMO_VERSION"'
 fi'
+  fi
 
   log "configuring user, workspace, developer tools, tailscaled, and wetty"
   push_bootstrap_server "$name"
