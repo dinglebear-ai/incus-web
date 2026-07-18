@@ -632,4 +632,19 @@ for needle in \
   fi
 done
 
+if ! grep -Fq -- "ReadWritePaths=/opt/incus-web-app/.next/cache \$INCUS_WEB_GOLDEN_CONFIG_DIR" "$root/scripts/incus-web-lib.sh"; then
+  printf 'host web unit must allow writes to the golden-config staging directory\n' >&2
+  exit 1
+fi
+
+for needle in \
+  '/usr/local/lib/incus-web/current/provisioner-server.mjs' \
+  '/usr/local/lib/incus-web/current/agent-runs.mjs' \
+  '/usr/local/lib/incus-web/current/service-auth.mjs'; do
+  if ! grep -Fq -- "$needle" "$root/scripts/auto-redeploy-provisioner.sh"; then
+    printf 'auto-redeploy must target the active release path: %s\n' "$needle" >&2
+    exit 1
+  fi
+done
+
 printf 'deploy validation checks are wired\n'

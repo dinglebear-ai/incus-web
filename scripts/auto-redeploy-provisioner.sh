@@ -3,9 +3,9 @@ set -euo pipefail
 
 REPO_DIR="${INCUS_WEB_REPO_DIR:-/home/jmagar/workspace/incus-web}"
 BRANCH="main"
-PROVISIONER_INSTALL_PATH="${INCUS_WEB_PROVISIONER_INSTALL_PATH:-/usr/local/lib/incus-web/provisioner-server.mjs}"
-AGENT_RUNS_INSTALL_PATH="${INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH:-/usr/local/lib/incus-web/agent-runs.mjs}"
-SERVICE_AUTH_INSTALL_PATH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH:-/usr/local/lib/incus-web/service-auth.mjs}"
+PROVISIONER_INSTALL_PATH="${INCUS_WEB_PROVISIONER_INSTALL_PATH:-/usr/local/lib/incus-web/current/provisioner-server.mjs}"
+AGENT_RUNS_INSTALL_PATH="${INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH:-/usr/local/lib/incus-web/current/agent-runs.mjs}"
+SERVICE_AUTH_INSTALL_PATH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH:-/usr/local/lib/incus-web/current/service-auth.mjs}"
 AGENT_RUN_STORE_PATH="${INCUS_WEB_AGENT_RUN_STORE_PATH:-/var/lib/incus-web/agent-runs.sqlite}"
 SERVICE_NAME="incus-web-provisioner.service"
 # Marks that files were synced but the restart was deferred because a run

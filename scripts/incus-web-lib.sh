@@ -1484,7 +1484,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
 ProtectSystem=full
-ReadWritePaths=/opt/incus-web-app/.next/cache
+ReadWritePaths=/opt/incus-web-app/.next/cache $INCUS_WEB_GOLDEN_CONFIG_DIR
 RestrictSUIDSGID=true
 LockPersonality=true
 
