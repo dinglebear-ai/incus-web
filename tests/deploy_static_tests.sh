@@ -622,8 +622,10 @@ for needle in \
   "Publish immutable image release" \
   'sudo chown -R "$(id -u):$(id -g)" "$EXPORT_DIR"' \
   'RELEASE_TAG: incus-web-agent-${{ github.sha }}' \
-  "git tag -f incus-web-agent-latest \"\$GITHUB_SHA\"" \
-  "git push -f origin incus-web-agent-latest" \
+  'latest_ref="tags/incus-web-agent-latest"' \
+  'gh api --method PATCH' \
+  '-F force=true' \
+  'gh api --method POST' \
   'gh release create "$RELEASE_TAG" dist/*' \
   "incus-web-agent-image"; do
   if ! grep -Fq -- "$needle" "$workflow"; then
