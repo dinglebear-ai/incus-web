@@ -46,6 +46,8 @@ export function useToast(): ToastContextValue {
 
 const SLIDE_ID = "aurora-toast-slide";
 
+const emptySubscribe = () => () => {};
+
 function injectSlideKeyframes() {
   if (typeof document === "undefined") return;
   if (document.getElementById(SLIDE_ID)) return;
@@ -250,15 +252,22 @@ const POSITION_CLASS: Record<NonNullable<ToastProviderProps["position"]>, string
 export function ToastProvider({ children, position = "top-right" }: ToastProviderProps) {
   const [items, setItems] = React.useState<ToastItem[]>([]);
   const [exiting, setExiting] = React.useState<Set<string>>(new Set());
-  const timersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const expiryTimersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const exitTimersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   React.useEffect(() => {
     injectSlideKeyframes();
   }, []);
 
   const removeItem = React.useCallback((id: string) => {
+    const expiryTimer = expiryTimersRef.current.get(id);
+    if (expiryTimer) clearTimeout(expiryTimer);
+    expiryTimersRef.current.delete(id);
+    if (exitTimersRef.current.has(id)) return;
+
     setExiting((prev) => new Set(prev).add(id));
-    setTimeout(() => {
+    const exitTimer = setTimeout(() => {
+      exitTimersRef.current.delete(id);
       setItems((prev) => prev.filter((t) => t.id !== id));
       setExiting((prev) => {
         const next = new Set(prev);
@@ -266,6 +275,7 @@ export function ToastProvider({ children, position = "top-right" }: ToastProvide
         return next;
       });
     }, 240);
+    exitTimersRef.current.set(id, exitTimer);
   }, []);
 
   const toast = React.useCallback(
@@ -276,7 +286,7 @@ export function ToastProvider({ children, position = "top-right" }: ToastProvide
 
       if (duration > 0) {
         const timer = setTimeout(() => removeItem(id), duration);
-        timersRef.current.set(id, timer);
+        expiryTimersRef.current.set(id, timer);
       }
     },
     [removeItem],
@@ -284,18 +294,33 @@ export function ToastProvider({ children, position = "top-right" }: ToastProvide
 
   // Clean up timers on unmount
   React.useEffect(() => {
-    const timers = timersRef.current;
+    const expiryTimers = expiryTimersRef.current;
+    const exitTimers = exitTimersRef.current;
     return () => {
-      timers.forEach((t) => clearTimeout(t));
+      expiryTimers.forEach((timer) => clearTimeout(timer));
+      exitTimers.forEach((timer) => clearTimeout(timer));
+      expiryTimers.clear();
+      exitTimers.clear();
     };
   }, []);
 
   const contextValue = React.useMemo(() => ({ toast }), [toast]);
 
+  // Hydration-safe mount check: returns false during SSR and the hydration
+  // render, true afterwards. A bare `typeof document` branch here makes the
+  // first client render differ from the server HTML and React 19 rejects
+  // the hydration.
+  const mounted = React.useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+
   const portal =
-    typeof document !== "undefined"
+    mounted
       ? createPortal(
           <div
+            role="region"
             aria-label="Notifications"
             className={cn("pointer-events-none z-[9999] flex flex-col gap-2.5", POSITION_CLASS[position])}
             style={{ maxWidth: 400 }}

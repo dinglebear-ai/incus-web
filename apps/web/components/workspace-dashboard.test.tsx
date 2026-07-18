@@ -86,7 +86,7 @@ describe("WorkspaceDashboard", () => {
     expect(screen.queryByText("Packages")).not.toBeInTheDocument();
     expect(screen.queryByText("mise")).not.toBeInTheDocument();
     expect(screen.getAllByText("Dotfiles").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("ubuntu-24.04-code-v1")).toHaveLength(2);
+    expect(screen.getByText("ubuntu-24.04-code-v1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
     expect(
@@ -132,6 +132,40 @@ describe("WorkspaceDashboard", () => {
     render(<WorkspaceDashboard inventory={{ ...inventory, workspaces: [] }} />);
 
     expect(screen.getByText("No workspace access")).toBeInTheDocument();
+  });
+
+  it("prefers a newer refreshed inventory snapshot over stale live cache", async () => {
+    const stopped = {
+      ...inventory,
+      workspaces: [
+        {
+          ...inventory.workspaces[0],
+          state: "stopped" as const,
+        },
+      ],
+    };
+    const { rerender } = render(<WorkspaceDashboard inventory={stopped} />);
+    expect(screen.getByRole("button", { name: /start/i })).toBeEnabled();
+
+    rerender(
+      <WorkspaceDashboard
+        inventory={{
+          ...inventory,
+          workspaces: [
+            {
+              ...inventory.workspaces[0],
+              state: "running",
+              updatedAt: "2026-06-30T00:01:00.000Z",
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
+    });
   });
 
   it("submits an agent run and displays progress identity", async () => {
@@ -345,6 +379,38 @@ describe("WorkspaceDashboard", () => {
       });
     });
     expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  it("refreshes a mounted snapshot list after palette snapshot creation", async () => {
+    let snapshotListCalls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith("/snapshots") && init?.method === "POST") {
+        return okResponse({ ok: true, snapshot: { name: "palette-snapshot" } });
+      }
+      if (target.endsWith("/snapshots")) {
+        snapshotListCalls += 1;
+        return okResponse({ ok: true, snapshots: [] });
+      }
+      if (target.endsWith("/activity")) return okResponse({ ok: true, activity: [] });
+      return okResponse({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<WorkspaceDashboard inventory={inventory} />);
+    fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
+    await waitFor(() => expect(snapshotListCalls).toBe(1));
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.change(
+      await screen.findByRole("textbox", {
+        name: "Search workspaces, tools, and actions",
+      }),
+      { target: { value: "snapshot" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /create snapshot/i }));
+
+    await waitFor(() => expect(snapshotListCalls).toBe(2));
   });
 });
 

@@ -11,51 +11,52 @@ import {
   TooltipTrigger,
 } from "@/components/ui/aurora/tooltip";
 import { ToolbarGroup } from "@/components/ui/aurora/toolbar";
-import type { Workspace, WorkspaceState } from "@/lib/workspaces/types";
+import { useToast } from "@/components/ui/aurora/toast";
+import {
+  dispatchWorkspaceLifecycle,
+  lifecycleActionLabel,
+  lifecycleActionsFor,
+  type WorkspaceLifecycleAction,
+} from "@/lib/workspaces/mutations";
+import type { Workspace } from "@/lib/workspaces/types";
 
-type WorkspaceAction = "start" | "stop" | "restart";
+type WorkspaceAction = WorkspaceLifecycleAction;
 
 export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [pendingAction, setPendingAction] = React.useState<WorkspaceAction>();
-  const [error, setError] = React.useState<string>();
   const [isPending, startTransition] = React.useTransition();
 
   async function runAction(action: WorkspaceAction) {
     setPendingAction(action);
-    setError(undefined);
     try {
-      const response = await fetch(`/api/workspaces/${workspace.id}/actions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ action }),
+      const result = await dispatchWorkspaceLifecycle(workspace.id, action);
+      if (!result.started) return;
+      toast({
+        status: "success",
+        title: `${lifecycleActionLabel(action)} dispatched`,
+        description: workspace.name,
       });
-      const body = await response.json().catch(() => undefined);
-      if (!response.ok || body?.ok !== true) {
-        const message =
-          body?.operation?.error?.message ??
-          body?.error?.message ??
-          "workspace action failed";
-        throw new Error(message);
-      }
       startTransition(() => {
         router.refresh();
       });
     } catch (actionError) {
-      setError(
-        actionError instanceof Error
-          ? actionError.message
-          : "workspace action failed",
-      );
+      toast({
+        status: "error",
+        title: `${lifecycleActionLabel(action)} failed`,
+        description:
+          actionError instanceof Error
+            ? actionError.message
+            : "workspace action failed",
+      });
     } finally {
       setPendingAction(undefined);
     }
   }
 
   const busy = isPending || pendingAction !== undefined;
-  const controls = actionsForState(workspace.state);
+  const controls = lifecycleActionsFor(workspace.state);
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -68,7 +69,7 @@ export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
                   type="button"
                   size="icon"
                   variant={action === "stop" ? "warn" : "aurora"}
-                  aria-label={labelForAction(action)}
+                  aria-label={lifecycleActionLabel(action)}
                   loading={pendingAction === action}
                   disabled={busy}
                   onClick={() => void runAction(action)}
@@ -76,7 +77,7 @@ export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
                   {iconForAction(action)}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{labelForAction(action)}</TooltipContent>
+              <TooltipContent>{lifecycleActionLabel(action)}</TooltipContent>
             </Tooltip>
           ))}
         </ToolbarGroup>
@@ -115,23 +116,8 @@ export function WorkspaceActions({ workspace }: { workspace: Workspace }) {
           )}
         </ToolbarGroup>
       </div>
-      {error ? (
-        <p className="aurora-text-meta max-w-md text-right text-[var(--aurora-error)]">
-          {error}
-        </p>
-      ) : null}
     </div>
   );
-}
-
-function actionsForState(state: WorkspaceState): WorkspaceAction[] {
-  if (state === "running" || state === "degraded" || state === "setting_up") {
-    return ["restart", "stop"];
-  }
-  if (state === "stopped" || state === "failed") {
-    return ["start"];
-  }
-  return [];
 }
 
 function iconForAction(action: WorkspaceAction) {
@@ -142,16 +128,5 @@ function iconForAction(action: WorkspaceAction) {
       return <SquareIcon aria-hidden="true" />;
     case "restart":
       return <RotateCwIcon aria-hidden="true" />;
-  }
-}
-
-function labelForAction(action: WorkspaceAction) {
-  switch (action) {
-    case "start":
-      return "Start";
-    case "stop":
-      return "Stop";
-    case "restart":
-      return "Restart";
   }
 }

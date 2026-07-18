@@ -105,6 +105,14 @@ incus-web consists of three major components:
 - [**Backup and Restore**](operations/backup-restore.md) - SQLite state backup, integrity, and restore procedure
 - [**Monitoring and Alerts**](operations/monitoring.md) - Readiness gauges, alert thresholds, and response runbooks
 
+### OpenWiki documentation workflow
+
+Repository documentation is regenerated through `.github/workflows/openwiki-update.yml`, which runs:
+
+- `openwiki code --update --print`
+- `OPENWIKI_PROVIDER=openrouter` with model `z-ai/glm-5.2`
+- automatic pull requests that include `openwiki/`, `AGENTS.md`, `CLAUDE.md`, and `.github/workflows/openwiki-update.yml`
+
 ## Key Design Principles
 
 ### Security Boundary

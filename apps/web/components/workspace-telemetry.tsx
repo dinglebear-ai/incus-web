@@ -60,28 +60,85 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
   const [lastUpdated, setLastUpdated] = React.useState(() => Date.now());
   const [polling, setPolling] = React.useState(false);
   const [error, setError] = React.useState<string>();
-
-  // No re-seed-on-identity-change logic here: the caller mounts one
-  // `WorkspacePane` per workspace keyed by `${workspace.id}:${createdAt}`
-  // (see workspace-dashboard.tsx), so a change in tracked workspace always
-  // remounts this hook from scratch rather than reusing the instance. A
-  // separate re-seed branch would be unreachable dead code that could only
-  // race an in-flight poll response against a reset it can never trigger.
+  // Prefer the push stream; fall back to interval polling where EventSource
+  // is unavailable (jsdom, very old browsers) or once the stream errors.
+  const [transport, setTransport] = React.useState<"sse" | "poll">(() =>
+    typeof window !== "undefined" && typeof window.EventSource !== "undefined"
+      ? "sse"
+      : "poll",
+  );
 
   // Guards against overlapping ticks: if a request outlives POLL_INTERVAL_MS
   // (slow provisioner, network hiccup), the next interval fire is skipped
   // rather than racing a second in-flight fetch for the same workspace.
   const inFlightRef = React.useRef(false);
+  const pollControllerRef = React.useRef<AbortController | undefined>(
+    undefined,
+  );
+  const requestGenerationRef = React.useRef(0);
+  const initialSignature = JSON.stringify(initial);
+  const workspaceSignature = JSON.stringify(workspace);
+  const previousInitialSignatureRef = React.useRef(initialSignature);
+  const trackedWorkspaceIdRef = React.useRef(initial.id);
+
+  const abortPoll = React.useCallback(() => {
+    pollControllerRef.current?.abort();
+    pollControllerRef.current = undefined;
+    inFlightRef.current = false;
+  }, []);
+
+  // `router.refresh()` can deliver a newer server snapshot without remounting
+  // WorkspacePane. Reconcile genuinely changed snapshots, including stopped
+  // -> live transitions, and invalidate any response started from the older
+  // snapshot so it cannot overwrite the refreshed state.
+  React.useEffect(() => {
+    if (previousInitialSignatureRef.current === initialSignature) return;
+
+    previousInitialSignatureRef.current = initialSignature;
+    // The parent shell mirrors live telemetry so its sidebar and palette stay
+    // current. When that same snapshot comes back as `initial`, it is an echo,
+    // not a new server refresh; avoid duplicating the sample in history.
+    if (workspaceSignature === initialSignature) return;
+
+    requestGenerationRef.current += 1;
+    abortPoll();
+
+    const identityChanged = trackedWorkspaceIdRef.current !== initial.id;
+    const timer = window.setTimeout(() => {
+      trackedWorkspaceIdRef.current = initial.id;
+      setWorkspace(initial);
+      setHistory((current) =>
+        identityChanged
+          ? [sampleFrom(initial)]
+          : [...current, sampleFrom(initial)].slice(-HISTORY_LENGTH),
+      );
+      setLastUpdated(Date.now());
+      setPolling(false);
+      setError(undefined);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [abortPoll, initial, initialSignature, workspaceSignature]);
 
   const poll = React.useCallback(async () => {
     if (inFlightRef.current) return;
+
+    const controller = new AbortController();
+    const generation = requestGenerationRef.current;
     inFlightRef.current = true;
+    pollControllerRef.current = controller;
     setPolling(true);
     try {
       const response = await fetch(`/api/workspaces/${workspace.id}/status`, {
         headers: { "Cache-Control": "no-store" },
+        signal: controller.signal,
       });
       const body = await response.json().catch(() => undefined);
+      if (
+        controller.signal.aborted ||
+        requestGenerationRef.current !== generation
+      ) {
+        return;
+      }
       if (!response.ok || body?.ok !== true || !body.workspace) {
         throw new Error(
           body?.error?.message ?? "failed to refresh workspace telemetry",
@@ -96,18 +153,94 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
       setLastUpdated(polledAt);
       setError(undefined);
     } catch (pollError) {
+      if (
+        controller.signal.aborted ||
+        requestGenerationRef.current !== generation
+      ) {
+        return;
+      }
       setError(
         pollError instanceof Error
           ? pollError.message
           : "failed to refresh workspace telemetry",
       );
     } finally {
-      inFlightRef.current = false;
-      setPolling(false);
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = undefined;
+        inFlightRef.current = false;
+        setPolling(false);
+      }
     }
   }, [workspace.id]);
 
+  // Live push transport: the status/events SSE route emits a `status` frame
+  // every few seconds server-side, so the dashboard reflects lifecycle
+  // changes without client-side polling. Application-level `error` frames
+  // (provisioner op failures) surface as telemetry errors; a transport-level
+  // failure downgrades to the polling path below for the rest of the session.
   React.useEffect(() => {
+    if (transport !== "sse") return;
+    if (!isLiveState(workspace.state)) return;
+
+    let source: EventSource | undefined;
+    const onStatus = (event: MessageEvent) => {
+      try {
+        const next = JSON.parse(event.data) as Workspace;
+        setWorkspace(next);
+        setHistory((current) =>
+          [...current, sampleFrom(next)].slice(-HISTORY_LENGTH),
+        );
+        setLastUpdated(Date.now());
+        setError(undefined);
+      } catch {
+        // Malformed frame — keep the stream, wait for the next one.
+      }
+    };
+    const onErrorFrame = (event: Event) => {
+      const data = (event as MessageEvent).data;
+      if (typeof data === "string") {
+        // Server-sent application error frame (provisioner op failed).
+        try {
+          setError(
+            JSON.parse(data)?.message ?? "failed to refresh workspace telemetry",
+          );
+        } catch {
+          setError("failed to refresh workspace telemetry");
+        }
+        return;
+      }
+      // Transport failure — close and downgrade to polling.
+      disconnect();
+      setTransport("poll");
+    };
+    const disconnect = () => {
+      if (!source) return;
+      source.removeEventListener("status", onStatus);
+      source.removeEventListener("error", onErrorFrame);
+      source.close();
+      source = undefined;
+    };
+    const connect = () => {
+      if (source || document.hidden) return;
+      source = new EventSource(`/api/workspaces/${workspace.id}/status/events`);
+      source.addEventListener("status", onStatus);
+      source.addEventListener("error", onErrorFrame);
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) disconnect();
+      else connect();
+    };
+
+    connect();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      disconnect();
+    };
+  }, [transport, workspace.id, workspace.state]);
+
+  React.useEffect(() => {
+    if (transport !== "poll") return;
     if (!isLiveState(workspace.state)) return;
 
     // Pause polling while the tab is hidden — modern browsers throttle but
@@ -137,9 +270,10 @@ export function useWorkspaceTelemetry(initial: Workspace): TelemetryState {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       stop();
+      abortPoll();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [poll, workspace.state]);
+  }, [abortPoll, poll, transport, workspace.state]);
 
   return { workspace, history, lastUpdated, polling, error };
 }
@@ -194,6 +328,7 @@ export function Sparkline({
   metric: "cpuPercent" | "memoryPercent";
   tone?: string;
 }) {
+  const gradientId = React.useId();
   const points = history
     .map((sample) => sample[metric])
     .filter((value): value is number => value !== undefined);
@@ -227,6 +362,16 @@ export function Sparkline({
       role="img"
       aria-label={`${metric === "cpuPercent" ? "CPU" : "Memory"} trend, last ${points.length} samples`}
     >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={tone} stopOpacity="0.26" />
+          <stop offset="100%" stopColor={tone} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon
+        points={`0,${height} ${coords} ${width},${height}`}
+        fill={`url(#${gradientId})`}
+      />
       <polyline
         points={coords}
         fill="none"
