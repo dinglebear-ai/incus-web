@@ -3,10 +3,16 @@ set -euo pipefail
 
 INCUS_WEB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 INCUS_WEB_LIB="$INCUS_WEB_ROOT/scripts/incus-web-lib.sh"
-INCUS_WEB_LIB_URL="${INCUS_WEB_LIB_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/incus-web-lib.sh}"
+INCUS_WEB_SOURCE_REF="${INCUS_WEB_SOURCE_REF:-$(git -C "$INCUS_WEB_ROOT" rev-parse HEAD 2>/dev/null || true)}"
+if [[ ! "$INCUS_WEB_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+  printf '[incus-web] error: INCUS_WEB_SOURCE_REF must be an immutable 40-character commit SHA\n' >&2
+  exit 1
+fi
+INCUS_WEB_RAW_BASE="https://raw.githubusercontent.com/jmagar/incus-web/$INCUS_WEB_SOURCE_REF"
+INCUS_WEB_LIB_URL="${INCUS_WEB_LIB_URL:-$INCUS_WEB_RAW_BASE/scripts/incus-web-lib.sh}"
 
 if [[ -f "$INCUS_WEB_LIB" ]]; then
-  # shellcheck source=scripts/incus-web-lib.sh
+  # shellcheck disable=SC1090 # resolved from this checkout at runtime
   . "$INCUS_WEB_LIB"
 else
   INCUS_WEB_LIB_TMP="$(mktemp)"
@@ -27,8 +33,9 @@ main() {
   ENABLE_NETWORK_ACL="${ENABLE_NETWORK_ACL:-1}"
   INCUS_PROFILE_NAME="${INCUS_PROFILE_NAME:-incus-web-agent}"
   INCUS_PROFILE_YAML="${INCUS_PROFILE_YAML:-$SCRIPT_DIR/incus-web-profile.yaml}"
-  INCUS_PROFILE_URL="${INCUS_PROFILE_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/incus-web-profile.yaml}"
+  INCUS_PROFILE_URL="${INCUS_PROFILE_URL:-$INCUS_WEB_RAW_BASE/incus-web-profile.yaml}"
   ACCESS_MODE="${ACCESS_MODE:-tailscale}"
+  INCUS_WEB_ALLOW_NO_ACCESS="${INCUS_WEB_ALLOW_NO_ACCESS:-0}"
   TS_HOSTNAME="${TS_HOSTNAME:-$CONTAINER_NAME}"
   TS_EXTRA_ARGS="${TS_EXTRA_ARGS:---accept-routes=false}"
   TAILSCALE_SERVE_PORT="${TAILSCALE_SERVE_PORT:-443}"
@@ -51,6 +58,10 @@ main() {
   OAUTH2_PROXY_VERSION="${OAUTH2_PROXY_VERSION:-v7.15.3}"
   TERMINAL_BACKEND="${TERMINAL_BACKEND:-wetty}"
   GHOSTTY_WEB_DEMO_VERSION="${GHOSTTY_WEB_DEMO_VERSION:-0.4.0-next.20.g1858a59}"
+  CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.212}"
+  CODEX_VERSION="${CODEX_VERSION:-0.144.3}"
+  WETTY_VERSION="${WETTY_VERSION:-2.7.0}"
+  TAILSCALE_VERSION="${TAILSCALE_VERSION:-1.98.8}"
   SETUP_PORT="${SETUP_PORT:-3080}"
   SETUP_ENABLED="${SETUP_ENABLED:-1}"
   SETUP_ALLOWED_EMAILS="${SETUP_ALLOWED_EMAILS:-$OIDC_ALLOWED_EMAILS}"
@@ -58,24 +69,26 @@ main() {
   SETUP_COMMAND_TIMEOUT_MS="${SETUP_COMMAND_TIMEOUT_MS:-1200000}"
   IDENTITY_PROXY_PORT="${IDENTITY_PROXY_PORT:-3090}"
   INCUS_WEB_BOOTSTRAP_SERVER="${INCUS_WEB_BOOTSTRAP_SERVER:-$SCRIPT_DIR/scripts/bootstrap-server.mjs}"
-  INCUS_WEB_BOOTSTRAP_SERVER_URL="${INCUS_WEB_BOOTSTRAP_SERVER_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/bootstrap-server.mjs}"
+  INCUS_WEB_BOOTSTRAP_SERVER_URL="${INCUS_WEB_BOOTSTRAP_SERVER_URL:-$INCUS_WEB_RAW_BASE/scripts/bootstrap-server.mjs}"
   INCUS_WEB_IDENTITY_PROXY="${INCUS_WEB_IDENTITY_PROXY:-$SCRIPT_DIR/scripts/identity-proxy.mjs}"
-  INCUS_WEB_IDENTITY_PROXY_URL="${INCUS_WEB_IDENTITY_PROXY_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/identity-proxy.mjs}"
+  INCUS_WEB_IDENTITY_PROXY_URL="${INCUS_WEB_IDENTITY_PROXY_URL:-$INCUS_WEB_RAW_BASE/scripts/identity-proxy.mjs}"
   INCUS_WEB_GHOSTTY_AURORA_PATCH="${INCUS_WEB_GHOSTTY_AURORA_PATCH:-$SCRIPT_DIR/scripts/ghostty-aurora-patch.mjs}"
-  INCUS_WEB_GHOSTTY_AURORA_PATCH_URL="${INCUS_WEB_GHOSTTY_AURORA_PATCH_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/ghostty-aurora-patch.mjs}"
+  INCUS_WEB_GHOSTTY_AURORA_PATCH_URL="${INCUS_WEB_GHOSTTY_AURORA_PATCH_URL:-$INCUS_WEB_RAW_BASE/scripts/ghostty-aurora-patch.mjs}"
+  INCUS_WEB_CONTAINER_PROVISION_PROGRAM="${INCUS_WEB_CONTAINER_PROVISION_PROGRAM:-$SCRIPT_DIR/scripts/container-provision.sh}"
+  INCUS_WEB_CONTAINER_PROVISION_PROGRAM_URL="${INCUS_WEB_CONTAINER_PROVISION_PROGRAM_URL:-$INCUS_WEB_RAW_BASE/scripts/container-provision.sh}"
   ENABLE_HOST_PROVISIONER="${ENABLE_HOST_PROVISIONER:-1}"
   INCUS_WEB_PROVISIONER_SERVER="${INCUS_WEB_PROVISIONER_SERVER:-$SCRIPT_DIR/scripts/provisioner-server.mjs}"
-  INCUS_WEB_PROVISIONER_SERVER_URL="${INCUS_WEB_PROVISIONER_SERVER_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/provisioner-server.mjs}"
+  INCUS_WEB_PROVISIONER_SERVER_URL="${INCUS_WEB_PROVISIONER_SERVER_URL:-$INCUS_WEB_RAW_BASE/scripts/provisioner-server.mjs}"
   INCUS_WEB_PROVISIONER_INSTALL_PATH="${INCUS_WEB_PROVISIONER_INSTALL_PATH:-/usr/local/lib/incus-web/provisioner-server.mjs}"
   INCUS_WEB_PROVISIONER_AGENT_RUNS="${INCUS_WEB_PROVISIONER_AGENT_RUNS:-$SCRIPT_DIR/scripts/agent-runs.mjs}"
-  INCUS_WEB_PROVISIONER_AGENT_RUNS_URL="${INCUS_WEB_PROVISIONER_AGENT_RUNS_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/agent-runs.mjs}"
+  INCUS_WEB_PROVISIONER_AGENT_RUNS_URL="${INCUS_WEB_PROVISIONER_AGENT_RUNS_URL:-$INCUS_WEB_RAW_BASE/scripts/agent-runs.mjs}"
   INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH="${INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH:-/usr/local/lib/incus-web/agent-runs.mjs}"
   INCUS_WEB_PROVISIONER_SERVICE_AUTH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH:-$SCRIPT_DIR/scripts/service-auth.mjs}"
-  INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/service-auth.mjs}"
+  INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_URL:-$INCUS_WEB_RAW_BASE/scripts/service-auth.mjs}"
   INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH:-/usr/local/lib/incus-web/service-auth.mjs}"
   ENABLE_BUILD_WORKER="${ENABLE_BUILD_WORKER:-0}"
   INCUS_WEB_BUILD_WORKER_SERVER="${INCUS_WEB_BUILD_WORKER_SERVER:-$SCRIPT_DIR/scripts/build-worker.mjs}"
-  INCUS_WEB_BUILD_WORKER_SERVER_URL="${INCUS_WEB_BUILD_WORKER_SERVER_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/build-worker.mjs}"
+  INCUS_WEB_BUILD_WORKER_SERVER_URL="${INCUS_WEB_BUILD_WORKER_SERVER_URL:-$INCUS_WEB_RAW_BASE/scripts/build-worker.mjs}"
   INCUS_WEB_BUILD_WORKER_INSTALL_PATH="${INCUS_WEB_BUILD_WORKER_INSTALL_PATH:-/usr/local/lib/incus-web/build-worker.mjs}"
   INCUS_WEB_BUILD_WORKER_ENV_FILE="${INCUS_WEB_BUILD_WORKER_ENV_FILE:-/etc/incus-web/build-worker.env}"
   INCUS_WEB_BUILD_WORKER_TOKEN_FILE="${INCUS_WEB_BUILD_WORKER_TOKEN_FILE:-/etc/incus-web/build-worker.token}"
@@ -105,6 +118,7 @@ main() {
   # multi-minute-plus copies a plain `dir` storage pool would require.
   INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS="${INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS:-180000}"
   INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS="${INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS:-200000}"
+  INCUS_WEB_PROVISIONER_TIMEOUT_MS="${INCUS_WEB_PROVISIONER_TIMEOUT_MS:-$((INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS + 5000))}"
   INCUS_WEB_PROVISIONER_USER="${INCUS_WEB_PROVISIONER_USER:-incus-web-provisioner}"
   INCUS_WEB_PROVISIONER_GROUP="${INCUS_WEB_PROVISIONER_GROUP:-incus-web}"
   INCUS_WEB_PROVISIONER_INCUS_GROUP="${INCUS_WEB_PROVISIONER_INCUS_GROUP:-incus-admin}"
@@ -127,15 +141,16 @@ main() {
   INCUS_WEB_APP_PORT="${INCUS_WEB_APP_PORT:-3090}"
   INCUS_WEB_WORKSPACE_OWNER_MODE="${INCUS_WEB_WORKSPACE_OWNER_MODE:-none}"
   INCUS_WEB_ALLOW_SHARED_PROTOTYPE="${INCUS_WEB_ALLOW_SHARED_PROTOTYPE:-0}"
+  INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION="${INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION:-0}"
   INCUS_WEB_TERMINAL_URL="${INCUS_WEB_TERMINAL_URL:-}"
   INCUS_WEB_TRUSTED_PROXY_SECRET="${INCUS_WEB_TRUSTED_PROXY_SECRET:-}"
   INCUS_WEB_WORKSPACE_ID="${INCUS_WEB_WORKSPACE_ID:-workspace-incus-web}"
   INCUS_WEB_INCUS_PROJECT="${INCUS_WEB_INCUS_PROJECT:-${INCUS_PROJECT:-}}"
   INCUS_WEB_INCUS_CONTAINER="${INCUS_WEB_INCUS_CONTAINER:-$CONTAINER_NAME}"
   INCUS_WEB_INFO_SCRIPT="${INCUS_WEB_INFO_SCRIPT:-$SCRIPT_DIR/scripts/incus-web-info.sh}"
-  INCUS_WEB_INFO_SCRIPT_URL="${INCUS_WEB_INFO_SCRIPT_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/incus-web-info.sh}"
+  INCUS_WEB_INFO_SCRIPT_URL="${INCUS_WEB_INFO_SCRIPT_URL:-$INCUS_WEB_RAW_BASE/scripts/incus-web-info.sh}"
   INCUS_WEB_OPEN_SCRIPT="${INCUS_WEB_OPEN_SCRIPT:-$SCRIPT_DIR/scripts/incus-web-open.sh}"
-  INCUS_WEB_OPEN_SCRIPT_URL="${INCUS_WEB_OPEN_SCRIPT_URL:-https://raw.githubusercontent.com/jmagar/incus-web/main/scripts/incus-web-open.sh}"
+  INCUS_WEB_OPEN_SCRIPT_URL="${INCUS_WEB_OPEN_SCRIPT_URL:-$INCUS_WEB_RAW_BASE/scripts/incus-web-open.sh}"
   WETTY_PORT="${WETTY_PORT:-3000}"
   WEB_USER="${WEB_USER:-agent}"
   INCUS_WEB_WORKSPACE_LABEL="${INCUS_WEB_WORKSPACE_LABEL:-}"
@@ -161,8 +176,11 @@ main() {
       require_var OIDC_CLIENT_ID
       require_var OIDC_CLIENT_SECRET
       ;;
+    none)
+      [[ "$INCUS_WEB_ALLOW_NO_ACCESS" == "1" ]] || die "ACCESS_MODE=none is reserved for isolated CI smoke tests; set INCUS_WEB_ALLOW_NO_ACCESS=1 explicitly"
+      ;;
     *)
-      die "ACCESS_MODE must be tailscale or oidc"
+      die "ACCESS_MODE must be tailscale, oidc, or explicitly authorized none"
       ;;
   esac
 
@@ -190,10 +208,24 @@ main() {
   ensure_profile_paths
   ensure_incus_profile
 
+  local rollback_container=""
   if incus_cmd list "$CONTAINER_NAME" --format csv -c n | grep -qx "$CONTAINER_NAME"; then
     if [[ "$RECREATE" == "1" ]]; then
-      log "deleting existing container $CONTAINER_NAME"
-      incus_cmd delete "$CONTAINER_NAME" --force
+      rollback_container="${CONTAINER_NAME}-rollback-$(date +%Y%m%d%H%M%S)"
+      log "preserving existing container as $rollback_container until replacement validation"
+      incus_cmd stop "$CONTAINER_NAME" --force >/dev/null 2>&1 || true
+      incus_cmd move "$CONTAINER_NAME" "$rollback_container"
+      rollback_redeploy() {
+        local exit_status=$?
+        trap - EXIT INT TERM
+        if [[ $exit_status -ne 0 && -n "${rollback_container:-}" ]]; then
+          incus_cmd delete "$CONTAINER_NAME" --force >/dev/null 2>&1 || true
+          incus_cmd move "$rollback_container" "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          incus_cmd start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+        fi
+        exit "$exit_status"
+      }
+      trap rollback_redeploy EXIT INT TERM
     else
       log "reusing existing container $CONTAINER_NAME"
       wait_for_running "$CONTAINER_NAME"
@@ -232,6 +264,11 @@ main() {
   configure_host_provisioner "$CONTAINER_NAME"
   configure_build_worker
   configure_host_web_app
+
+  if [[ -n "$rollback_container" ]]; then
+    log "replacement validated; rollback container retained as $rollback_container"
+    trap - EXIT INT TERM
+  fi
 
   log_deploy_summary
 }

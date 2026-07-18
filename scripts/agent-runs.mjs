@@ -1,20 +1,23 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { createConnection, createServer as createNetServer } from "node:net";
 import { connect as createTlsConnection } from "node:tls";
+import { DatabaseSync } from "node:sqlite";
 
 export const CODEX_APP_SERVER_NOT_CONFIGURED =
   "Codex app-server controller is not configured for this host.";
 
 const terminalPhases = new Set(["succeeded", "failed"]);
 const defaultAgentRunLogLimit = 5000;
+const defaultAgentRunHistoryLimit = 1000;
+const schedulerStates = new WeakMap();
 
 export function agentRunConfigFromEnv(env = process.env) {
   const incusProject = env.INCUS_WEB_INCUS_PROJECT || "default";
   return {
     storePath:
-      env.INCUS_WEB_AGENT_RUN_STORE_PATH || "/var/lib/incus-web/agent-runs.json",
+      env.INCUS_WEB_AGENT_RUN_STORE_PATH || "/var/lib/incus-web/agent-runs.sqlite",
     goldenContainer:
       env.INCUS_WEB_AGENT_GOLDEN_CONTAINER || "incus-web-agent-golden",
     goldenProject: env.INCUS_WEB_AGENT_GOLDEN_PROJECT || incusProject,
@@ -32,76 +35,198 @@ export function agentRunConfigFromEnv(env = process.env) {
     ),
     claudeCommandTemplate:
       env.INCUS_WEB_CLAUDE_COMMAND_TEMPLATE || "claude -p {{task}}",
+    maxConcurrentRuns: positiveInteger(env.INCUS_WEB_AGENT_RUN_MAX_CONCURRENT, 2),
+    maxQueuedRuns: positiveInteger(env.INCUS_WEB_AGENT_RUN_MAX_QUEUED, 100),
+    historyLimit: positiveInteger(
+      env.INCUS_WEB_AGENT_RUN_HISTORY_LIMIT,
+      defaultAgentRunHistoryLimit,
+    ),
   };
 }
 
-export function createAgentRunStore(path) {
+export function createAgentRunStore(path, options = {}) {
+  mkdirSyncParent(path);
+  const legacyRuns = migrateLegacyJson(path);
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL UNIQUE,
+      workspace_id TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      run_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_runs_workspace_created
+      ON agent_runs(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS agent_runs_status_created
+      ON agent_runs(status, created_at ASC);
+    CREATE TABLE IF NOT EXISTS agent_run_logs (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      at TEXT NOT NULL,
+      level TEXT NOT NULL,
+      message TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_run_logs_run_sequence
+      ON agent_run_logs(run_id, sequence DESC);
+  `);
+  if (legacyRuns.length > 0) {
+    const insertLegacy = db.prepare(`INSERT OR IGNORE INTO agent_runs
+      (id, request_id, workspace_id, owner_user_id, status, phase, created_at, updated_at, run_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insertLegacyLog = db.prepare(
+      "INSERT INTO agent_run_logs (run_id, at, level, message) VALUES (?, ?, ?, ?)",
+    );
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const legacy of legacyRuns) {
+        const migrated = {
+          ...legacy,
+          requestId: legacy.requestId || `legacy-${legacy.id}`,
+          requestFingerprint: legacy.requestFingerprint || "legacy",
+        };
+        insertLegacy.run(migrated.id, migrated.requestId, migrated.workspaceId,
+          migrated.ownerUserId, migrated.status, migrated.phase, migrated.createdAt,
+          migrated.updatedAt || migrated.createdAt, JSON.stringify(migrated));
+        for (const entry of Array.isArray(legacy.logs) ? legacy.logs.slice(-agentRunLogLimit()) : []) {
+          insertLegacyLog.run(migrated.id, entry.at || migrated.createdAt,
+            entry.level || "info", String(entry.message || ""));
+        }
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  const historyLimit = positiveInteger(options.historyLimit, agentRunHistoryLimit());
+  const transaction = (fn) => (...args) => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn(...args);
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+
+  function rowToRun(row, includeLogs = true) {
+    if (!row) return undefined;
+    const run = JSON.parse(row.run_json);
+    if (includeLogs) {
+      run.logs = db.prepare(`
+        SELECT at, level, message FROM agent_run_logs
+        WHERE run_id = ? ORDER BY sequence DESC LIMIT ?
+      `).all(run.id, agentRunLogLimit()).reverse();
+    }
+    return run;
+  }
+
+  function updateRun(runId, patch) {
+    const row = db.prepare("SELECT run_json FROM agent_runs WHERE id = ?").get(runId);
+    if (!row) throw new Error(`agent run not found: ${runId}`);
+    const current = JSON.parse(row.run_json);
+    const next = {
+      ...current,
+      ...patch,
+      container: { ...current.container, ...(patch.container || {}) },
+      controller: patch.controller === undefined ? current.controller : patch.controller,
+      updatedAt: patch.updatedAt || new Date().toISOString(),
+    };
+    db.prepare(`UPDATE agent_runs SET status = ?, phase = ?, updated_at = ?, run_json = ? WHERE id = ?`)
+      .run(next.status, next.phase, next.updatedAt, JSON.stringify(next), runId);
+    if (terminalPhases.has(next.phase)) {
+      db.prepare(`DELETE FROM agent_runs WHERE id IN (
+        SELECT id FROM agent_runs WHERE status IN ('succeeded', 'failed')
+        ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?
+      )`).run(historyLimit);
+    }
+    return rowToRun({ run_json: JSON.stringify(next) });
+  }
+
   return {
     async list(workspaceId, limit = 20) {
-      const runs = await readRuns(path);
-      return runs
-        .filter((run) => run.workspaceId === workspaceId)
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-        .slice(0, clampLimit(limit));
+      return db.prepare(`SELECT run_json FROM agent_runs WHERE workspace_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`)
+        .all(workspaceId, clampLimit(limit)).map((row) => rowToRun(row));
+    },
+    async get(runId, workspaceId, ownerUserId) {
+      const row = db.prepare(`SELECT run_json FROM agent_runs WHERE id = ? AND workspace_id = ? AND owner_user_id = ?`)
+        .get(runId, workspaceId, ownerUserId);
+      return rowToRun(row);
+    },
+    async getByRequestId(requestId) {
+      return rowToRun(db.prepare("SELECT run_json FROM agent_runs WHERE request_id = ?").get(requestId));
+    },
+    async countActive() {
+      return Number(db.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE status IN ('queued', 'running')").get().count);
+    },
+    async listRecoverable() {
+      return db.prepare(`SELECT run_json FROM agent_runs WHERE status IN ('queued', 'running') ORDER BY created_at ASC`)
+        .all().map((row) => rowToRun(row, false));
     },
     async insert(run) {
-      const runs = await readRuns(path);
-      runs.unshift(run);
-      await writeRuns(path, runs);
-      return run;
+      transaction(() => {
+        db.prepare(`INSERT INTO agent_runs
+          (id, request_id, workspace_id, owner_user_id, status, phase, created_at, updated_at, run_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(run.id, run.requestId, run.workspaceId, run.ownerUserId, run.status, run.phase,
+            run.createdAt, run.updatedAt, JSON.stringify(run));
+        db.prepare(`DELETE FROM agent_runs WHERE id IN (
+          SELECT id FROM agent_runs WHERE status IN ('succeeded', 'failed')
+          ORDER BY created_at DESC LIMIT -1 OFFSET ?
+        )`).run(historyLimit);
+      })();
+      return rowToRun({ run_json: JSON.stringify(run) });
     },
     async update(runId, patch) {
-      const runs = await readRuns(path);
-      const index = runs.findIndex((run) => run.id === runId);
-      if (index === -1) {
-        throw new Error(`agent run not found: ${runId}`);
-      }
-      const next = {
-        ...runs[index],
-        ...patch,
-        container: {
-          ...runs[index].container,
-          ...(patch.container || {}),
-        },
-        controller:
-          patch.controller === undefined
-            ? runs[index].controller
-            : patch.controller,
-        updatedAt: new Date().toISOString(),
-      };
-      runs[index] = next;
-      await writeRuns(path, runs);
-      return next;
+      return transaction(() => updateRun(runId, patch))();
     },
     async appendLog(runId, message, level = "info") {
-      const runs = await readRuns(path);
-      const index = runs.findIndex((run) => run.id === runId);
-      if (index === -1) {
-        throw new Error(`agent run not found: ${runId}`);
-      }
       const entry = {
         at: new Date().toISOString(),
         level,
         message: String(message),
       };
-      const logs = [...(Array.isArray(runs[index].logs) ? runs[index].logs : []), entry]
-        .slice(-agentRunLogLimit());
-      const next = {
-        ...runs[index],
-        logs,
-        lastLogExcerpt: entry.message,
-        updatedAt: entry.at,
-      };
-      runs[index] = next;
-      await writeRuns(path, runs);
-      return next;
+      return transaction(() => {
+        if (!db.prepare("SELECT 1 FROM agent_runs WHERE id = ?").get(runId)) {
+          throw new Error(`agent run not found: ${runId}`);
+        }
+        db.prepare("INSERT INTO agent_run_logs (run_id, at, level, message) VALUES (?, ?, ?, ?)")
+          .run(runId, entry.at, entry.level, entry.message);
+        db.prepare(`DELETE FROM agent_run_logs WHERE run_id = ? AND sequence NOT IN (
+          SELECT sequence FROM agent_run_logs WHERE run_id = ? ORDER BY sequence DESC LIMIT ?
+        )`).run(runId, runId, agentRunLogLimit());
+        return updateRun(runId, { lastLogExcerpt: entry.message, updatedAt: entry.at });
+      })();
     },
+    close() { db.close(); },
   };
 }
 
 export async function dispatchAgentRun(command, options) {
   const config = options.config || agentRunConfigFromEnv();
   const store = options.store || createAgentRunStore(config.storePath);
+  const existing = await store.getByRequestId(command.requestId);
+  if (existing) {
+    if (existing.requestFingerprint !== requestFingerprint(command)) {
+      const error = new Error("requestId was already used with a different command");
+      error.code = "invalid_input";
+      throw error;
+    }
+    return { run: existing };
+  }
+  if ((await store.countActive()) >= config.maxQueuedRuns) {
+    const error = new Error("agent run admission queue is full");
+    error.code = "timeout";
+    throw error;
+  }
   const run = createAgentRun(command, config);
   await store.insert(run);
 
@@ -118,15 +243,53 @@ export async function dispatchAgentRun(command, options) {
   }
 
   if (options.execute !== false) {
-    void executeAgentRun(run, {
-      ...options,
-      config,
-      store,
-    }).catch(async (err) => {
-      await failRun(store, run.id, err);
-    });
+    scheduleAgentRun(run, { ...options, config, store });
   }
   return { run };
+}
+
+export async function reconcileAgentRuns(options) {
+  const config = options.config || agentRunConfigFromEnv();
+  const store = options.store || createAgentRunStore(config.storePath);
+  const recoverable = await store.listRecoverable();
+  for (const run of recoverable) {
+    if (run.status === "running") {
+      await failRun(
+        store,
+        run.id,
+        new Error("provisioner restarted while the agent run was active"),
+      );
+    } else if (options.execute !== false) {
+      scheduleAgentRun(run, { ...options, config, store });
+    }
+  }
+  return { reconciled: recoverable.length };
+}
+
+function scheduleAgentRun(run, options) {
+  let state = schedulerStates.get(options.store);
+  if (!state) {
+    state = { active: 0, queue: [] };
+    schedulerStates.set(options.store, state);
+  }
+  state.queue.push({ run, options });
+  drainAgentRunQueue(state);
+}
+
+function drainAgentRunQueue(state) {
+  while (
+    state.queue.length > 0 &&
+    state.active < positiveInteger(state.queue[0].options.config.maxConcurrentRuns, 2)
+  ) {
+    const item = state.queue.shift();
+    state.active += 1;
+    void executeAgentRun(item.run, item.options)
+      .catch((err) => failRun(item.options.store, item.run.id, err))
+      .finally(() => {
+        state.active -= 1;
+        drainAgentRunQueue(state);
+      });
+  }
 }
 
 export async function listAgentRuns(command, options) {
@@ -135,6 +298,22 @@ export async function listAgentRuns(command, options) {
   return {
     runs: await store.list(command.workspace.id, command.payload?.limit ?? 20),
   };
+}
+
+export async function getAgentRun(command, options) {
+  const config = options.config || agentRunConfigFromEnv();
+  const store = options.store || createAgentRunStore(config.storePath);
+  const run = await store.get(
+    command.payload.runId,
+    command.workspace.id,
+    command.workspace.ownerUserId,
+  );
+  if (!run) {
+    const error = new Error("agent run was not found");
+    error.code = "invalid_state";
+    throw error;
+  }
+  return { run };
 }
 
 export async function executeAgentRun(run, options) {
@@ -674,6 +853,8 @@ export function createAgentRun(command, config, now = new Date()) {
   const stamp = timestampId(now);
   return {
     id: `run_${stamp}_${suffix}`,
+    requestId: command.requestId,
+    requestFingerprint: requestFingerprint(command),
     workspaceId: command.workspace.id,
     ownerUserId: command.workspace.ownerUserId,
     container: {
@@ -693,6 +874,17 @@ export function createAgentRun(command, config, now = new Date()) {
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
+}
+
+function requestFingerprint(command) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      type: command.type,
+      actorUserId: command.actor?.userId,
+      workspace: command.workspace,
+      payload: command.payload,
+    }))
+    .digest("hex");
 }
 
 export function clampLimit(value) {
@@ -1029,6 +1221,31 @@ function agentRunLogLimit() {
   return Math.max(100, Math.min(50000, parsed));
 }
 
+function agentRunHistoryLimit() {
+  return positiveInteger(
+    process.env.INCUS_WEB_AGENT_RUN_HISTORY_LIMIT,
+    defaultAgentRunHistoryLimit,
+  );
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function mkdirSyncParent(path) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+}
+
+function migrateLegacyJson(path) {
+  if (!existsSync(path)) return [];
+  const contents = readFileSync(path, "utf8");
+  if (!contents.trimStart().startsWith("[")) return [];
+  const runs = JSON.parse(contents);
+  renameSync(path, `${path}.legacy-json`);
+  return Array.isArray(runs) ? runs : [];
+}
+
 function copyArgsForRun(run) {
   if (run.container.sourceProject === run.container.project) {
     return [
@@ -1092,27 +1309,6 @@ function timestampId(now) {
   return now.toISOString().replace(/\D/g, "").slice(0, 14);
 }
 
-async function readRuns(path) {
-  try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    if (err && err.code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-}
-
-async function writeRuns(path, runs) {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(runs, null, 2)}\n`, {
-    mode: 0o600,
-  });
-  await rename(tmp, path);
-}
 
 export function isTerminalAgentRun(run) {
   return terminalPhases.has(run.phase);

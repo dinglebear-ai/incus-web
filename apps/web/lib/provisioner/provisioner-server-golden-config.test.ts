@@ -48,7 +48,7 @@ function postOperations(
   });
 }
 
-async function waitForSocket(socketPath: string, timeoutMs = 5000) {
+async function waitForSocket(socketPath: string, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -67,7 +67,7 @@ async function waitForSocket(socketPath: string, timeoutMs = 5000) {
 // proceed to a real `incus file push` invocation, and this suite asserts
 // that happens without ever risking a mutation against a real, possibly-
 // in-use container.
-const nonexistentContainer = "incus-web-integration-test-does-not-exist";
+const nonexistentContainer = "ws-integration-test-does-not-exist";
 
 describe("provisioner-server ImportGoldenConfig (integration)", () => {
   let tempDir: string;
@@ -96,17 +96,23 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
           ...process.env,
           INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
           INCUS_WEB_PROVISIONER_SOCKET: socketPath,
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
+          INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
           INCUS_WEB_PROVISIONER_HOST: "",
           INCUS_WEB_PROVISIONER_PORT: "0",
           INCUS_WEB_INCUS_CONTAINER: nonexistentContainer,
           INCUS_WEB_GOLDEN_CONFIG_DIR: goldenConfigDir,
+          INCUS_WEB_GOLDEN_CONFIG_MAX_ENTRIES: "3",
+          INCUS_WEB_GOLDEN_CONFIG_MAX_EXPANDED_BYTES: "1024",
+          INCUS_WEB_GOLDEN_CONFIG_MAX_COMPRESSION_RATIO: "10",
+          INCUS_WEB_GOLDEN_CONFIG_MAX_DEPTH: "4",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
 
     await waitForSocket(socketPath);
-  }, 15000);
+  }, 30000);
 
   afterAll(async () => {
     child?.kill();
@@ -170,11 +176,12 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
       status: "failed",
       error: { code: "invalid_input" },
     });
+    await expect(access(stagedPath)).rejects.toThrow();
   });
 
   it("proceeds past hash verification and attempts a real `incus file push` for a correctly-hashed staged file, instead of silently no-op'ing", async () => {
     const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
-    const content = Buffer.from("pretend this is a zip file");
+    const content = centralDirectoryZip([{ name: "claude/settings.json", compressed: 10, expanded: 10 }]);
     await writeFile(stagedPath, content);
     const sha256Hex = createHash("sha256").update(content).digest("hex");
 
@@ -190,5 +197,54 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
       status: "failed",
       error: { code: "incus_unavailable" },
     });
+    await expect(access(stagedPath)).rejects.toThrow();
   });
+
+  it("rejects unsafe, secret-bearing, excessive, and zip-bomb metadata before Incus and cleans staging", async () => {
+    const cases = [
+      centralDirectoryZip([{ name: "../escape", compressed: 1, expanded: 1 }]),
+      centralDirectoryZip([{ name: "codex/auth.json", compressed: 1, expanded: 1 }]),
+      centralDirectoryZip([{ name: "claude/huge", compressed: 1, expanded: 100 }]),
+      centralDirectoryZip([
+        { name: "a", compressed: 1, expanded: 1 },
+        { name: "b", compressed: 1, expanded: 1 },
+        { name: "c", compressed: 1, expanded: 1 },
+        { name: "d", compressed: 1, expanded: 1 },
+      ]),
+    ];
+    for (const [index, content] of cases.entries()) {
+      const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
+      await writeFile(stagedPath, content);
+      const sha256Hex = createHash("sha256").update(content).digest("hex");
+      const response = await postOperations(socketPath, baseCommand(`unsafe-${index}`, { sha256Hex }));
+      expect(response.body).toMatchObject({ status: "failed", error: { code: "invalid_input" } });
+      await expect(access(stagedPath)).rejects.toThrow();
+    }
+  }, 15_000);
 });
+
+function centralDirectoryZip(
+  entries: Array<{ name: string; compressed: number; expanded: number; externalAttributes?: number }>,
+) {
+  const records = entries.map((entry) => {
+    const name = Buffer.from(entry.name, "utf8");
+    const record = Buffer.alloc(46 + name.length);
+    record.writeUInt32LE(0x02014b50, 0);
+    record.writeUInt16LE(0x031e, 4);
+    record.writeUInt16LE(20, 6);
+    record.writeUInt32LE(entry.compressed, 20);
+    record.writeUInt32LE(entry.expanded, 24);
+    record.writeUInt16LE(name.length, 28);
+    record.writeUInt32LE(entry.externalAttributes ?? 0, 38);
+    name.copy(record, 46);
+    return record;
+  });
+  const central = Buffer.concat(records);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(0, 16);
+  return Buffer.concat([central, eocd]);
+}

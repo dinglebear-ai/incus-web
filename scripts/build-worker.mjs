@@ -115,6 +115,18 @@ db.exec(`
     updated_at TEXT NOT NULL,
     UNIQUE(owner_user_id, name)
   );
+  CREATE INDEX IF NOT EXISTS image_registry_owner_created_idx
+    ON image_registry(owner_user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS build_presets_owner_updated_idx
+    ON build_presets(owner_user_id, updated_at DESC);
+`);
+ensureColumn("builds", "log_bytes", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("builds", "log_next_offset", "INTEGER NOT NULL DEFAULT 0");
+db.exec(`
+  UPDATE builds SET
+    log_bytes = COALESCE((SELECT SUM(length(CAST(chunk AS BLOB))) FROM build_logs WHERE build_id = builds.id), 0),
+    log_next_offset = COALESCE((SELECT MAX(offset + length(CAST(chunk AS BLOB))) FROM build_logs WHERE build_id = builds.id), 0)
+  WHERE log_bytes = 0 AND EXISTS (SELECT 1 FROM build_logs WHERE build_id = builds.id);
 `);
 recoverInterruptedBuilds();
 
@@ -251,7 +263,7 @@ function getBuildStatus(command) {
 
 function listImages(command) {
   const rows = db
-    .prepare("SELECT * FROM image_registry WHERE owner_user_id = ? ORDER BY created_at DESC")
+    .prepare("SELECT * FROM image_registry WHERE owner_user_id = ? ORDER BY created_at DESC LIMIT 200")
     .all(command.actor.userId);
   return {
     images: rows.map((row) => ({
@@ -284,7 +296,7 @@ function setMaster(command) {
 
 function listPresets(command) {
   const rows = db
-    .prepare("SELECT * FROM build_presets WHERE owner_user_id = ? ORDER BY updated_at DESC")
+    .prepare("SELECT * FROM build_presets WHERE owner_user_id = ? ORDER BY updated_at DESC LIMIT 200")
     .all(command.actor.userId);
   return {
     presets: rows.map((row) => ({
@@ -433,23 +445,34 @@ function failBuild(buildId, message) {
 
 function appendLog(buildId, text) {
   if (!text) return;
-  const last = db
-    .prepare("SELECT offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset DESC LIMIT 1")
-    .get(buildId);
-  const offset = last ? Number(last.offset) + byteLength(String(last.chunk)) : 0;
-  db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
-    buildId,
-    offset,
-    text,
-    new Date().toISOString(),
-  );
-  pruneBuildLogs(buildId);
+  const build = db.prepare("SELECT log_bytes, log_next_offset FROM builds WHERE id = ?").get(buildId);
+  if (!build) return;
+  const offset = Number(build.log_next_offset);
+  const addedBytes = byteLength(text);
+  runTransaction(() => {
+    db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
+      buildId,
+      offset,
+      text,
+      new Date().toISOString(),
+    );
+    db.prepare("UPDATE builds SET log_bytes = log_bytes + ?, log_next_offset = ? WHERE id = ?")
+      .run(addedBytes, offset + addedBytes, buildId);
+  });
+  if (Number(build.log_bytes) + addedBytes > maxLogBytesPerBuild) pruneBuildLogs(buildId);
 }
 
 function readLogSince(buildId, since) {
   const rows = db
-    .prepare("SELECT offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
-    .all(buildId);
+    .prepare(
+      `SELECT offset, chunk FROM build_logs
+       WHERE build_id = ? AND offset >= COALESCE(
+         (SELECT MAX(offset) FROM build_logs WHERE build_id = ? AND offset <= ?),
+         ?
+       )
+       ORDER BY offset ASC LIMIT 2048`,
+    )
+    .all(buildId, buildId, since, since);
   let chunk = "";
   let offset = since;
   for (const row of rows) {
@@ -474,10 +497,12 @@ function readLogSince(buildId, since) {
 }
 
 function pruneBuildLogs(buildId) {
+  const build = db.prepare("SELECT log_bytes FROM builds WHERE id = ?").get(buildId);
+  if (!build || Number(build.log_bytes) <= maxLogBytesPerBuild) return;
   const rows = db
     .prepare("SELECT rowid, offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
     .all(buildId);
-  let total = rows.reduce((sum, row) => sum + byteLength(String(row.chunk)), 0);
+  let total = Number(build.log_bytes);
   let removed = 0;
   for (const row of rows) {
     if (total <= maxLogBytesPerBuild) break;
@@ -485,6 +510,7 @@ function pruneBuildLogs(buildId) {
     total -= byteLength(String(row.chunk));
     removed += 1;
   }
+  db.prepare("UPDATE builds SET log_bytes = ? WHERE id = ?").run(total, buildId);
   if (removed > 0) {
     const first = db
       .prepare("SELECT offset FROM build_logs WHERE build_id = ? ORDER BY offset ASC LIMIT 1")
@@ -505,15 +531,13 @@ function pruneBuildLogs(buildId) {
 function recoverInterruptedBuilds() {
   const rows = db.prepare("SELECT id FROM builds WHERE status = 'running' ORDER BY started_at ASC").all();
   const now = new Date().toISOString();
-  runTransaction(() => {
-    for (const row of rows) {
-      updateBuild(row.id, "failed", {
-        completedAt: now,
-        error: "build worker restarted before completion",
-      });
-      appendLog(row.id, "build failed: build worker restarted before completion\n");
-    }
-  });
+  for (const row of rows) {
+    updateBuild(row.id, "failed", {
+      completedAt: now,
+      error: "build worker restarted before completion",
+    });
+    appendLog(row.id, "build failed: build worker restarted before completion\n");
+  }
 }
 
 function hasTruncationMarker(buildId) {
@@ -572,6 +596,13 @@ function runTransaction(fn) {
   }
 }
 
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((entry) => entry.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 function run(command, args, onOutput = () => {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -579,10 +610,13 @@ function run(command, args, onOutput = () => {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
+    let timedOut = false;
+    let killTimer;
     const timer = setTimeout(() => {
+      timedOut = true;
       kill(child, "SIGTERM");
-      setTimeout(() => kill(child, "SIGKILL"), 1000).unref();
-      reject(new Error(`${command} timed out`));
+      killTimer = setTimeout(() => kill(child, "SIGKILL"), 1000);
+      killTimer.unref();
     }, commandTimeoutMs);
     timer.unref();
     child.stdout.on("data", (data) => onOutput(data.toString()));
@@ -593,11 +627,14 @@ function run(command, args, onOutput = () => {}) {
     });
     child.on("error", (err) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       reject(err);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
+      if (killTimer) clearTimeout(killTimer);
+      if (timedOut) reject(new Error(`${command} timed out`));
+      else if (code === 0) resolve();
       else reject(new Error(stderr.trim() || `${command} exited ${code}`));
     });
   });

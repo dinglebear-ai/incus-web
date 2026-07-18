@@ -11,7 +11,7 @@ const workspace = {
 
 const sendWorkspaceCommand = vi.fn();
 const getMutableWorkspaceRefForActor = vi.fn();
-const stageGoldenConfigUpload = vi.fn();
+const stageGoldenConfigStream = vi.fn();
 const headersMock = vi.fn(
   async () => new Headers({ "x-auth-request-email": "test@example.com" }),
 );
@@ -27,10 +27,11 @@ vi.mock("@/lib/workspaces/provisioner", () => ({
 }));
 
 vi.mock("@/lib/workspaces/golden-config", () => ({
+  GoldenConfigUploadError: class GoldenConfigUploadError extends Error {
+    constructor(message: string, public code: string) { super(message); }
+  },
   goldenConfigMaxBytesFromEnv: () => 10 * 1024 * 1024,
-  looksLikeZip: (buffer: Uint8Array) =>
-    buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b,
-  stageGoldenConfigUpload: (...args: unknown[]) => stageGoldenConfigUpload(...args),
+  stageGoldenConfigStream: (...args: unknown[]) => stageGoldenConfigStream(...args),
 }));
 
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
@@ -58,10 +59,16 @@ describe("golden-config import route", () => {
   beforeEach(() => {
     getMutableWorkspaceRefForActor.mockReturnValue({ ok: true, workspace });
     sendWorkspaceCommand.mockReset();
-    stageGoldenConfigUpload.mockReset();
-    stageGoldenConfigUpload.mockResolvedValue({
+    stageGoldenConfigStream.mockReset();
+    stageGoldenConfigStream.mockImplementation(async (_id, body: ReadableStream<Uint8Array>) => {
+      const content = Buffer.from(await new Response(body).arrayBuffer());
+      if (content.length === 0) throw Object.assign(new Error("empty"), { code: "empty" });
+      if (content.length > 10 * 1024 * 1024) throw Object.assign(new Error("large"), { code: "too_large" });
+      if (content[0] !== 0x50 || content[1] !== 0x4b) throw Object.assign(new Error("invalid"), { code: "invalid_zip" });
+      return {
       sha256Hex: "a".repeat(64),
       stagedPath: "/var/lib/incus-web/golden-config/workspace-incus-web.zip",
+      };
     });
     headersMock.mockResolvedValue(
       new Headers({ "x-auth-request-email": "test@example.com" }),
@@ -77,7 +84,7 @@ describe("golden-config import route", () => {
     const response = await postGoldenConfig(ZIP_MAGIC);
 
     expect(response.status).toBe(403);
-    expect(stageGoldenConfigUpload).not.toHaveBeenCalled();
+    expect(stageGoldenConfigStream).not.toHaveBeenCalled();
     expect(sendWorkspaceCommand).not.toHaveBeenCalled();
   });
 
@@ -85,28 +92,28 @@ describe("golden-config import route", () => {
     const response = await postGoldenConfig(ZIP_MAGIC, { workspaceId: "other-workspace" });
 
     expect(response.status).toBe(404);
-    expect(stageGoldenConfigUpload).not.toHaveBeenCalled();
+    expect(stageGoldenConfigStream).not.toHaveBeenCalled();
   });
 
   it("rejects an unexpected content-type before staging anything", async () => {
     const response = await postGoldenConfig(ZIP_MAGIC, { contentType: "text/plain" });
 
     expect(response.status).toBe(415);
-    expect(stageGoldenConfigUpload).not.toHaveBeenCalled();
+    expect(stageGoldenConfigStream).not.toHaveBeenCalled();
   });
 
   it("rejects a body that doesn't look like a zip before staging anything", async () => {
     const response = await postGoldenConfig(Buffer.from("not a zip at all"));
 
     expect(response.status).toBe(400);
-    expect(stageGoldenConfigUpload).not.toHaveBeenCalled();
+    expect(stageGoldenConfigStream).toHaveBeenCalled();
   });
 
   it("rejects an empty body before staging anything", async () => {
     const response = await postGoldenConfig(Buffer.alloc(0));
 
     expect(response.status).toBe(400);
-    expect(stageGoldenConfigUpload).not.toHaveBeenCalled();
+    expect(stageGoldenConfigStream).toHaveBeenCalled();
   });
 
   it("rejects a body over the configured size limit before staging anything", async () => {
@@ -115,7 +122,7 @@ describe("golden-config import route", () => {
     const response = await postGoldenConfig(oversized);
 
     expect(response.status).toBe(413);
-    expect(stageGoldenConfigUpload).not.toHaveBeenCalled();
+    expect(stageGoldenConfigStream).toHaveBeenCalled();
   });
 
   it("stages a valid zip upload and dispatches ImportGoldenConfig with its hash", async () => {
@@ -136,7 +143,7 @@ describe("golden-config import route", () => {
     const response = await postGoldenConfig(ZIP_MAGIC);
 
     expect(response.status).toBe(200);
-    expect(stageGoldenConfigUpload).toHaveBeenCalledWith(workspace.id, expect.any(Buffer));
+    expect(stageGoldenConfigStream).toHaveBeenCalledWith(workspace.id, expect.any(ReadableStream), 10 * 1024 * 1024);
     expect(sendWorkspaceCommand).toHaveBeenCalledWith(
       expect.objectContaining({ email: "test@example.com" }),
       "ImportGoldenConfig",

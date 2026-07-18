@@ -82,10 +82,10 @@ describe("agent-runs/[runId] route", () => {
     sendWorkspaceCommand.mockResolvedValue({
       id: "op-1",
       requestId: "req-test",
-      type: "ListAgentRuns",
+      type: "GetAgentRun",
       workspaceId: workspace.id,
       status: "succeeded",
-      result: { runs: [run] },
+      result: { run },
     });
 
     const response = await getRun(run.id);
@@ -97,17 +97,17 @@ describe("agent-runs/[runId] route", () => {
     });
   });
 
-  it("returns 404 when the run id is not found in the list", async () => {
+  it("returns 404 when the indexed run id is not found", async () => {
     sendWorkspaceCommand.mockResolvedValue({
       id: "op-1",
       requestId: "req-test",
-      type: "ListAgentRuns",
+      type: "GetAgentRun",
       workspaceId: workspace.id,
       status: "succeeded",
-      result: { runs: [] },
+      result: undefined,
     });
 
-    const response = await getRun("run_does_not_exist");
+    const response = await getRun("run_20260702000102_deadbeef");
 
     expect(response.status).toBe(404);
   });
@@ -116,7 +116,7 @@ describe("agent-runs/[runId] route", () => {
     sendWorkspaceCommand.mockResolvedValue({
       id: "op-1",
       requestId: "req-test",
-      type: "ListAgentRuns",
+      type: "GetAgentRun",
       workspaceId: workspace.id,
       status: "failed",
       error: { code: "incus_unavailable", message: "incusd is down", retryable: true },

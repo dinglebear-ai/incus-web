@@ -21,6 +21,13 @@ GOLDEN_PROJECT="${INCUS_WEB_AGENT_GOLDEN_PROJECT:-default}"
 # too rather than the default dir pool.
 GOLDEN_STORAGE_POOL="${INCUS_WEB_AGENT_GOLDEN_STORAGE_POOL:-labby-zfs}"
 RECREATE="${FORCE_RECREATE:-${RECREATE:-0}}"
+CODEX_VERSION="${INCUS_WEB_CODEX_VERSION:-0.144.3}"
+CANDIDATE_CONTAINER="${GOLDEN_CONTAINER}-candidate-$$"
+PREVIOUS_CONTAINER="${GOLDEN_CONTAINER}-previous"
+golden_exists=0
+source_stopped_by_script=0
+candidate_created=0
+completed=0
 
 log() {
   printf '[build-agent-golden] %s\n' "$*"
@@ -31,13 +38,26 @@ die() {
   exit 1
 }
 
+cleanup() {
+  local status=$?
+  if [[ "$source_stopped_by_script" == "1" ]]; then
+    incus start "$SOURCE_CONTAINER" >/dev/null 2>&1 || true
+  fi
+  if [[ "$completed" != "1" && "$candidate_created" == "1" ]]; then
+    incus delete "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" --force >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
 if incus list "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" --format csv -c n 2>/dev/null | grep -qx "$GOLDEN_CONTAINER"; then
+  golden_exists=1
   if [[ "$RECREATE" != "1" ]]; then
     die "$GOLDEN_CONTAINER already exists in project $GOLDEN_PROJECT; set FORCE_RECREATE=1 to rebuild it"
   fi
-  log "FORCE_RECREATE=1: deleting existing $GOLDEN_CONTAINER"
-  incus delete "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" --force
+  log "FORCE_RECREATE=1: preserving existing $GOLDEN_CONTAINER until candidate validation"
 fi
+incus delete "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" --force >/dev/null 2>&1 || true
 
 incus list "$SOURCE_CONTAINER" --format csv -c n 2>/dev/null | grep -qx "$SOURCE_CONTAINER" \
   || die "source container $SOURCE_CONTAINER not found -- this script clones it as the golden base"
@@ -53,27 +73,30 @@ fi
 if [[ "$source_was_running" == "1" ]]; then
   log "stopping $SOURCE_CONTAINER for a clean copy"
   incus stop "$SOURCE_CONTAINER"
+  source_stopped_by_script=1
 fi
 
-log "copying $SOURCE_CONTAINER -> $GOLDEN_CONTAINER (storage pool: $GOLDEN_STORAGE_POOL)"
-incus copy "$SOURCE_CONTAINER" "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" --storage "$GOLDEN_STORAGE_POOL"
+log "copying $SOURCE_CONTAINER -> $CANDIDATE_CONTAINER (storage pool: $GOLDEN_STORAGE_POOL)"
+incus copy "$SOURCE_CONTAINER" "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" --storage "$GOLDEN_STORAGE_POOL"
+candidate_created=1
 
 if [[ "$source_was_running" == "1" ]]; then
   log "restarting $SOURCE_CONTAINER (it's the user's live daily workspace)"
   incus start "$SOURCE_CONTAINER"
+  source_stopped_by_script=0
 fi
 
 log "stripping host-specific devices copied from $SOURCE_CONTAINER (port proxies, live workspace mount)"
 for device in ghostty-direct oidc-proxy workspace; do
-  incus config device remove "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" "$device" 2>/dev/null || true
+  incus config device remove "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" "$device" 2>/dev/null || true
 done
 
 log "starting $GOLDEN_CONTAINER to provision it"
-incus start "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT"
+incus start "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT"
 sleep 3
 
 log "stripping credentials, secrets, and shell history from the golden image"
-incus exec "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c '
+incus exec "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c '
 set -e
 rm -rf /home/agent/.ssh
 rm -rf /home/agent/.gnupg
@@ -100,13 +123,13 @@ log "seeding /root/.claude.json (non-secret account identity metadata)"
 # .credentials.json to recognize a valid login; without it `claude -p`
 # reports "Not logged in" even with a valid credentials file.
 incus exec "$SOURCE_CONTAINER" -- cat /home/agent/.claude.json \
-  | incus exec "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c 'cat > /root/.claude.json'
+  | incus exec "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c 'cat > /root/.claude.json'
 
 log "installing codex CLI (not present on the source image)"
-incus exec "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" -- npm install -g @openai/codex
+incus exec "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" -- npm install -g "@openai/codex@$CODEX_VERSION"
 
 log "verifying golden image"
-incus exec "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c '
+incus exec "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c '
   git --version >/dev/null
   claude --version >/dev/null 2>&1 || true
   codex --version >/dev/null
@@ -121,6 +144,20 @@ incus exec "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" -- bash -c '
 '
 
 log "stopping $GOLDEN_CONTAINER (golden images stay stopped between dispatches)"
-incus stop "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT"
+incus stop "$CANDIDATE_CONTAINER" --project "$GOLDEN_PROJECT"
+
+if [[ "$golden_exists" == "1" ]]; then
+  incus delete "$PREVIOUS_CONTAINER" --project "$GOLDEN_PROJECT" --force >/dev/null 2>&1 || true
+  incus move "$GOLDEN_CONTAINER" "$PREVIOUS_CONTAINER" --project "$GOLDEN_PROJECT"
+fi
+if ! incus move "$CANDIDATE_CONTAINER" "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT"; then
+  if [[ "$golden_exists" == "1" ]]; then
+    incus move "$PREVIOUS_CONTAINER" "$GOLDEN_CONTAINER" --project "$GOLDEN_PROJECT" >/dev/null 2>&1 || true
+  fi
+  die "failed to promote validated golden candidate"
+fi
+candidate_created=0
+completed=1
+trap - EXIT INT TERM
 
 log "done: $GOLDEN_CONTAINER is ready in project $GOLDEN_PROJECT"

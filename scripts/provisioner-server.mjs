@@ -1,28 +1,24 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, realpath, stat, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, stat, statfs, unlink } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import {
   agentRunConfigFromEnv,
   createAgentRunStore,
   dispatchAgentRun,
+  getAgentRun,
   listAgentRuns,
+  reconcileAgentRuns,
 } from "./agent-runs.mjs";
 import { requireConfiguredToken, verifyBearerToken } from "./service-auth.mjs";
 
-let token;
-try {
-  token = requireConfiguredToken(
-    process.env.INCUS_WEB_PROVISIONER_TOKEN,
-    "INCUS_WEB_PROVISIONER_TOKEN",
-  );
-} catch (err) {
-  console.error(err.message);
-  process.exit(1);
-}
+let token = process.env.INCUS_WEB_PROVISIONER_TOKEN?.trim() || "";
 const socketPath =
   process.env.INCUS_WEB_PROVISIONER_SOCKET || "/run/incus-web/provisioner.sock";
 const socketMode = parseMode(
@@ -40,12 +36,16 @@ const incusContainer =
   "incus-web";
 const prototypeSetupPhase =
   process.env.INCUS_WEB_PROTOTYPE_SETUP_PHASE || "ready";
+const timeoutBudgetMs = Number.parseInt(
+  process.env.INCUS_WEB_PROVISIONER_TIMEOUT_MS || "30000",
+  10,
+);
 const commandTimeoutMs = Number.parseInt(
-  process.env.INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS || "8000",
+  process.env.INCUS_WEB_PROVISIONER_COMMAND_TIMEOUT_MS || String(timeoutBudgetMs),
   10,
 );
 const requestTimeoutMs = Number.parseInt(
-  process.env.INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS || "9000",
+  process.env.INCUS_WEB_PROVISIONER_REQUEST_TIMEOUT_MS || String(commandTimeoutMs + 1000),
   10,
 );
 const maxProcessOutputBytes = Number.parseInt(
@@ -58,6 +58,10 @@ const statusCacheTtlMs = Number.parseInt(
 );
 const maxConcurrentIncusCommands = Number.parseInt(
   process.env.INCUS_WEB_PROVISIONER_MAX_INCUS_COMMANDS || "4",
+  10,
+);
+const maxIdempotencyRecords = Number.parseInt(
+  process.env.INCUS_WEB_PROVISIONER_MAX_IDEMPOTENCY_RECORDS || "10000",
   10,
 );
 // The web app API route (apps/web/app/api/workspaces/[workspaceId]/golden-config/route.ts)
@@ -75,11 +79,46 @@ const maxGoldenConfigBytes = Number.parseInt(
   process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_BYTES || String(150 * 1024 * 1024),
   10,
 );
+const maxGoldenConfigEntries = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_ENTRIES || "5000",
+  10,
+);
+const maxGoldenConfigExpandedBytes = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_EXPANDED_BYTES || String(500 * 1024 * 1024),
+  10,
+);
+const maxGoldenConfigCompressionRatio = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_COMPRESSION_RATIO || "100",
+  10,
+);
+const maxGoldenConfigDepth = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_DEPTH || "20",
+  10,
+);
 let activeIncusCommands = 0;
 const statusCache = new Map();
 const statusInFlight = new Map();
 const agentRunConfig = agentRunConfigFromEnv();
-const agentRunStore = createAgentRunStore(agentRunConfig.storePath);
+let agentRunStore;
+function getAgentRunStore() {
+  agentRunStore ||= createAgentRunStore(agentRunConfig.storePath, {
+    historyLimit: agentRunConfig.historyLimit,
+  });
+  return agentRunStore;
+}
+let idempotencyDb;
+function getIdempotencyDb() {
+  if (idempotencyDb) return idempotencyDb;
+  const path = process.env.INCUS_WEB_PROVISIONER_STATE_DB || "/var/lib/incus-web/provisioner.sqlite";
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  idempotencyDb = new DatabaseSync(path);
+  idempotencyDb.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000");
+  idempotencyDb.exec(`CREATE TABLE IF NOT EXISTS provisioner_requests (
+    scope_key TEXT PRIMARY KEY, command_hash TEXT NOT NULL, response_json TEXT,
+    created_at TEXT NOT NULL, completed_at TEXT
+  ); CREATE INDEX IF NOT EXISTS provisioner_requests_created ON provisioner_requests(created_at);`);
+  return idempotencyDb;
+}
 const setupPhases = new Set([
   "not_configured",
   "queued",
@@ -164,8 +203,8 @@ function socketAcceptsConnections(path) {
   });
 }
 
-function requireServiceAuth(req, res) {
-  if (verifyBearerToken(req.headers.authorization, token)) {
+function requireServiceAuth(req, res, expectedToken = token) {
+  if (verifyBearerToken(req.headers.authorization, expectedToken)) {
     return true;
   }
   // Log presence/absence and length only -- never the raw header value,
@@ -219,8 +258,105 @@ function validateWorkspace(command) {
       false,
     );
   }
+  if (command.workspace.ownerUserId !== command.actor.userId) {
+    return error(
+      "metadata_mismatch",
+      "workspace owner did not match the authenticated actor tuple",
+      false,
+    );
+  }
+  const configuredSubject = process.env.INCUS_WEB_WORKSPACE_OWNER_SUBJECT?.trim();
+  const configuredEmail = process.env.INCUS_WEB_WORKSPACE_OWNER_EMAIL?.trim().toLowerCase();
+  if (
+    (configuredSubject && command.workspace.ownerUserId !== `oidc:${configuredSubject}`) ||
+    (configuredEmail && command.actor.email.toLowerCase() !== configuredEmail)
+  ) {
+    return error("metadata_mismatch", "workspace owner did not match host owner policy", false);
+  }
   return undefined;
 }
+
+const commandTypes = new Set([
+  "CreateWorkspace", "StartWorkspace", "StopWorkspace", "RestartWorkspace",
+  "GetWorkspaceStatus", "RunSetup", "DispatchAgentRun", "ListAgentRuns",
+  "GetAgentRun", "SetWorkspaceLimits", "SetWorkspaceMount", "ClearWorkspaceMount",
+  "CreateWorkspaceSnapshot", "ListWorkspaceSnapshots", "ImportGoldenConfig",
+]);
+
+function validateCommandEnvelope(command) {
+  if (!isPlainObject(command) || !hasOnlyKeys(command, ["version", "requestId", "type", "actor", "workspace", "payload"])) {
+    return error("invalid_input", "command envelope contains unsupported or missing fields");
+  }
+  if (command.version !== "provisioner.v1" || !commandTypes.has(command.type)) {
+    return error("invalid_input", "unsupported provisioner command");
+  }
+  if (!boundedString(command.requestId, 1, 200)) {
+    return error("invalid_input", "requestId is invalid");
+  }
+  if (!isPlainObject(command.actor) || !hasOnlyKeys(command.actor, ["userId", "oidcSubject", "email", "displayName"]) ||
+      !boundedString(command.actor.userId, 1, 200) || !boundedString(command.actor.oidcSubject, 1, 500) ||
+      !boundedString(command.actor.email, 1, 320) ||
+      (command.actor.displayName !== undefined && !boundedString(command.actor.displayName, 0, 200))) {
+    return error("invalid_input", "actor is invalid");
+  }
+  if (!isPlainObject(command.workspace) || !hasOnlyKeys(command.workspace, ["id", "ownerUserId", "incusProject", "incusContainer"]) ||
+      !boundedString(command.workspace.id, 1, 200) || !boundedString(command.workspace.ownerUserId, 1, 200) ||
+      !validProject(command.workspace.incusProject) || !validContainer(command.workspace.incusContainer)) {
+    return error("invalid_input", "workspace ref is invalid");
+  }
+  return validatePayload(command.type, command.payload);
+}
+
+function validatePayload(type, payload) {
+  if (!isPlainObject(payload)) return error("invalid_input", `${type} payload must be an object`);
+  const empty = ["StartWorkspace", "GetWorkspaceStatus", "ClearWorkspaceMount", "ListWorkspaceSnapshots"];
+  if (empty.includes(type)) return hasOnlyKeys(payload, []) ? undefined : error("invalid_input", "payload contains unsupported fields");
+  switch (type) {
+    case "CreateWorkspace":
+      return hasOnlyKeys(payload, ["templateVersion", "resourceProfileId", "autoStart"]) && boundedString(payload.templateVersion, 1, 200) && payload.resourceProfileId === "local-dev" && typeof payload.autoStart === "boolean" ? undefined : error("invalid_input", "CreateWorkspace payload is invalid");
+    case "StopWorkspace":
+      return hasOnlyKeys(payload, ["force", "timeoutSeconds"]) && typeof payload.force === "boolean" && integerBetween(payload.timeoutSeconds, 1, 300) ? undefined : error("invalid_input", "StopWorkspace payload is invalid");
+    case "RestartWorkspace":
+      return hasOnlyKeys(payload, ["timeoutSeconds"]) && integerBetween(payload.timeoutSeconds, 1, 300) ? undefined : error("invalid_input", "RestartWorkspace payload is invalid");
+    case "SetWorkspaceLimits": {
+      const valid = hasOnlyKeys(payload, ["cpu", "memory"]) &&
+        (payload.cpu === undefined || (boundedString(payload.cpu, 1, 32) && /^\d+(?:\.\d+)?$/.test(payload.cpu) && Number(payload.cpu) > 0)) &&
+        (payload.memory === undefined || (boundedString(payload.memory, 1, 32) && /^\d+(?:\.\d+)?[KMGT]i?B$/i.test(payload.memory) && Number.parseFloat(payload.memory) > 0));
+      return valid ? undefined : error("invalid_input", "SetWorkspaceLimits payload is invalid");
+    }
+    case "SetWorkspaceMount":
+      return hasOnlyKeys(payload, ["hostPath"]) && boundedString(payload.hostPath, 1, 1024) && payload.hostPath.startsWith("/") && !payload.hostPath.includes("\0") ? undefined : error("invalid_input", "SetWorkspaceMount payload is invalid");
+    case "CreateWorkspaceSnapshot":
+      return hasOnlyKeys(payload, ["name"]) && (payload.name === undefined || (boundedString(payload.name, 1, 63) && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(payload.name))) ? undefined : error("invalid_input", "CreateWorkspaceSnapshot payload is invalid");
+    case "ImportGoldenConfig":
+      return hasOnlyKeys(payload, ["sha256Hex"]) && typeof payload.sha256Hex === "string" && /^[a-f0-9]{64}$/.test(payload.sha256Hex) ? undefined : error("invalid_input", "ImportGoldenConfig payload is invalid");
+    case "ListAgentRuns":
+      return hasOnlyKeys(payload, ["limit"]) && integerBetween(payload.limit, 1, 100) ? undefined : error("invalid_input", "ListAgentRuns payload is invalid");
+    case "GetAgentRun":
+      return hasOnlyKeys(payload, ["runId"]) && typeof payload.runId === "string" && /^run_\d{14}_[a-z0-9]+$/.test(payload.runId) ? undefined : error("invalid_input", "GetAgentRun payload is invalid");
+    case "DispatchAgentRun": {
+      const valid = hasOnlyKeys(payload, ["agent", "repoUrl", "ref", "task"]) && ["codex", "claude"].includes(payload.agent) &&
+        boundedString(payload.repoUrl, 1, 512) && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(payload.repoUrl) &&
+        boundedString(payload.task, 1, 12000) && (payload.ref === undefined || (boundedString(payload.ref, 1, 200) && /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/.test(payload.ref) && !payload.ref.includes("..")));
+      return valid ? undefined : error("invalid_input", "DispatchAgentRun payload is invalid");
+    }
+    case "RunSetup": {
+      const age = payload.ageKey;
+      const validAge = age === undefined || (isPlainObject(age) && hasOnlyKeys(age, ["value", "persistEncrypted"]) && boundedString(age.value, 1, 200000) && typeof age.persistEncrypted === "boolean");
+      return hasOnlyKeys(payload, ["dotfilesRepo", "ageKey", "skipAptScripts"]) && typeof payload.skipAptScripts === "boolean" &&
+        (payload.dotfilesRepo === undefined || boundedString(payload.dotfilesRepo, 1, 512)) && validAge ? undefined : error("invalid_input", "RunSetup payload is invalid");
+    }
+    default:
+      return error("invalid_input", "unsupported provisioner command");
+  }
+}
+
+function isPlainObject(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
+function hasOnlyKeys(value, keys) { return Object.keys(value).every((key) => keys.includes(key)); }
+function boundedString(value, min, max) { return typeof value === "string" && value.length >= min && value.length <= max; }
+function integerBetween(value, min, max) { return Number.isInteger(value) && value >= min && value <= max; }
+function validProject(value) { return typeof value === "string" && (value === "default" || /^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,61}[A-Za-z0-9])?$/.test(value)); }
+function validContainer(value) { return typeof value === "string" && (value === "incus-web" || /^ws-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value)); }
 
 function run(command, args, { signal, input } = {}) {
   return new Promise((resolve, reject) => {
@@ -391,67 +527,19 @@ async function getWorkspaceStatus(command, options) {
     options,
   );
   const instance = await incusJson(
-    ["query", `/1.0/instances/${incusContainer}`],
+    ["query", `/1.0/instances/${incusContainer}?recursion=1`],
     options,
   );
-  const cpuLimit = await optionalText([
-    "config",
-    "get",
-    incusContainer,
-    "limits.cpu",
-  ], options);
-  const memoryLimit = await optionalText([
-    "config",
-    "get",
-    incusContainer,
-    "limits.memory",
-  ], options);
-  const rootDiskSize = await optionalText([
-    "config",
-    "device",
-    "get",
-    incusContainer,
-    "root",
-    "size",
-  ], options);
-  const rootDiskPool = await optionalText([
-    "config",
-    "device",
-    "get",
-    incusContainer,
-    "root",
-    "pool",
-  ], options);
-  const networkBridge = await optionalText([
-    "config",
-    "device",
-    "get",
-    incusContainer,
-    "eth0",
-    "network",
-  ], options);
-  const workspaceHostPath = await optionalText([
-    "config",
-    "device",
-    "get",
-    incusContainer,
-    "workspace",
-    "source",
-  ], options);
-  const workspaceMountPath = await optionalText([
-    "config",
-    "device",
-    "get",
-    incusContainer,
-    "workspace",
-    "path",
-  ], options);
-  const processesLimit = await optionalText([
-    "config",
-    "get",
-    incusContainer,
-    "limits.processes",
-  ], options);
+  const config = instance.expanded_config || instance.config || {};
+  const devices = instance.expanded_devices || instance.devices || {};
+  const cpuLimit = config["limits.cpu"] || "";
+  const memoryLimit = config["limits.memory"] || "";
+  const processesLimit = config["limits.processes"] || "";
+  const rootDiskSize = devices.root?.size || "";
+  const rootDiskPool = devices.root?.pool || "";
+  const networkBridge = devices.eth0?.network || devices.eth0?.parent || "";
+  const workspaceHostPath = devices.workspace?.source || "";
+  const workspaceMountPath = devices.workspace?.path || "";
 
   return {
     workspaceId: command.workspace.id,
@@ -459,8 +547,8 @@ async function getWorkspaceStatus(command, options) {
     incusProject: command.workspace.incusProject,
     incusContainer: command.workspace.incusContainer,
     image:
-      instance.config?.["image.description"] ||
-      instance.config?.["volatile.base_image"] ||
+      config["image.description"] ||
+      config["volatile.base_image"] ||
       undefined,
     storagePool: rootDiskPool || undefined,
     networkBridge: networkBridge || undefined,
@@ -477,7 +565,7 @@ async function getWorkspaceStatus(command, options) {
     rootDiskUsedBytes: rootDiskUsage(state),
     rootDiskLimitBytes: parseByteLimit(rootDiskSize),
     setupPhase: setupPhase(
-      instance.config?.["user.incus-web.setup-phase"] || prototypeSetupPhase,
+      config["user.incus-web.setup-phase"] || prototypeSetupPhase,
     ),
     lastCheckedAt: new Date().toISOString(),
   };
@@ -889,6 +977,7 @@ function goldenConfigExtractScript(user) {
   const home = `/home/${user}`;
   return [
     "set -e",
+    `trap 'rm -rf ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR} ${GOLDEN_CONFIG_CONTAINER_ZIP_PATH}' EXIT`,
     `rm -rf ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR}`,
     `mkdir -p ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR}`,
     `cd ${GOLDEN_CONFIG_CONTAINER_EXTRACT_DIR}`,
@@ -946,56 +1035,117 @@ async function importGoldenConfig(command, options) {
     );
   }
   if (stagedStat.size > maxGoldenConfigBytes) {
+    await unlink(stagedPath).catch(() => {});
     throw Object.assign(new Error("staged golden config exceeds the size limit"), {
       code: "invalid_input",
     });
   }
 
-  const content = await readFile(stagedPath);
-  const actualHash = createHash("sha256").update(content).digest("hex");
-  if (actualHash !== command.payload.sha256Hex.toLowerCase()) {
-    throw Object.assign(
-      new Error("staged golden config content did not match the declared sha256Hex"),
-      { code: "invalid_input" },
-    );
-  }
-
-  await pushContainerFile(
-    incusContainer,
-    incusProject,
-    GOLDEN_CONFIG_CONTAINER_ZIP_PATH,
-    content,
-    options,
-  );
-
-  let stdout;
   try {
-    stdout = await execInAgentContainer(
-      { container: { name: incusContainer, project: incusProject } },
-      goldenConfigExtractScript(goldenConfigUser),
+    const content = await readFile(stagedPath);
+    const actualHash = createHash("sha256").update(content).digest("hex");
+    if (actualHash !== command.payload.sha256Hex.toLowerCase()) {
+      throw Object.assign(
+        new Error("staged golden config content did not match the declared sha256Hex"),
+        { code: "invalid_input" },
+      );
+    }
+    await preflightGoldenConfigArchive(content, stagedPath);
+    await pushContainerFile(
+      incusContainer,
+      incusProject,
+      GOLDEN_CONFIG_CONTAINER_ZIP_PATH,
+      content,
       options,
     );
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw goldenConfigFailure(
-      message.includes("exit status 42") || message.includes("unzip is not installed")
-        ? "unzip is not installed in this container image"
-        : `failed to extract golden config: ${message}`,
-    );
+    let stdout;
+    try {
+      stdout = await execInAgentContainer(
+        { container: { name: incusContainer, project: incusProject } },
+        goldenConfigExtractScript(goldenConfigUser),
+        options,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw goldenConfigFailure(
+        message.includes("exit status 42") || message.includes("unzip is not installed")
+          ? "unzip is not installed in this container image"
+          : `failed to extract golden config: ${message}`,
+      );
+    }
+
+    const markerIndex = stdout.indexOf(GOLDEN_CONFIG_MANIFEST_MARKER);
+    const fileCountText = (markerIndex === -1 ? stdout : stdout.slice(0, markerIndex)).trim();
+    const manifestJson = markerIndex === -1 ? "{}" : stdout.slice(markerIndex + GOLDEN_CONFIG_MANIFEST_MARKER.length);
+    const fileCount = Number.parseInt(fileCountText, 10);
+    return {
+      workspaceId: command.workspace.id,
+      extractedAt: new Date().toISOString(),
+      fileCount: Number.isFinite(fileCount) && fileCount >= 0 ? fileCount : 0,
+      warnings: parseGoldenConfigWarnings(manifestJson),
+    };
+  } finally {
+    await unlink(stagedPath).catch(() => {});
   }
+}
 
-  const markerIndex = stdout.indexOf(GOLDEN_CONFIG_MANIFEST_MARKER);
-  const fileCountText = (markerIndex === -1 ? stdout : stdout.slice(0, markerIndex)).trim();
-  const manifestJson =
-    markerIndex === -1 ? "{}" : stdout.slice(markerIndex + GOLDEN_CONFIG_MANIFEST_MARKER.length);
-  const fileCount = Number.parseInt(fileCountText, 10);
+async function preflightGoldenConfigArchive(content, stagedPath) {
+  const eocd = findZipEocd(content);
+  if (eocd < 0 || content.readUInt32LE(eocd) !== 0x06054b50) {
+    throw Object.assign(new Error("staged golden config is not a valid ZIP archive"), { code: "invalid_input" });
+  }
+  const entryCount = content.readUInt16LE(eocd + 10);
+  const centralSize = content.readUInt32LE(eocd + 12);
+  let offset = content.readUInt32LE(eocd + 16);
+  if (entryCount > maxGoldenConfigEntries || offset + centralSize > eocd) {
+    throw Object.assign(new Error("golden config ZIP exceeds entry limits or has an invalid directory"), { code: "invalid_input" });
+  }
+  let expandedBytes = 0;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > eocd || content.readUInt32LE(offset) !== 0x02014b50) {
+      throw Object.assign(new Error("golden config ZIP central directory is invalid"), { code: "invalid_input" });
+    }
+    const compressed = content.readUInt32LE(offset + 20);
+    const expanded = content.readUInt32LE(offset + 24);
+    const nameLength = content.readUInt16LE(offset + 28);
+    const extraLength = content.readUInt16LE(offset + 30);
+    const commentLength = content.readUInt16LE(offset + 32);
+    const externalAttributes = content.readUInt32LE(offset + 38);
+    if (offset + 46 + nameLength + extraLength + commentLength > eocd) {
+      throw Object.assign(new Error("golden config ZIP central directory is truncated"), { code: "invalid_input" });
+    }
+    const name = content.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    const normalized = name.replaceAll("\\", "/");
+    const segments = normalized.split("/").filter(Boolean);
+    const unixMode = externalAttributes >>> 16;
+    if (!name || name.includes("\0") || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || segments.includes("..") || segments.length > maxGoldenConfigDepth) {
+      throw Object.assign(new Error("golden config ZIP contains an unsafe path"), { code: "invalid_input" });
+    }
+    if ((unixMode & 0o170000) === 0o120000) {
+      throw Object.assign(new Error("golden config ZIP may not contain symbolic links"), { code: "invalid_input" });
+    }
+    if (segments.some((part) => /^(?:auth\.json|credentials\.json|\.ssh|id_rsa|id_ed25519)$/i.test(part))) {
+      throw Object.assign(new Error("golden config ZIP contains credential material; secrets must be excluded or supplied through the encrypted credential path"), { code: "invalid_input" });
+    }
+    expandedBytes += expanded;
+    if (expandedBytes > maxGoldenConfigExpandedBytes || (expanded > 0 && expanded / Math.max(1, compressed) > maxGoldenConfigCompressionRatio)) {
+      throw Object.assign(new Error("golden config ZIP exceeds expanded-size or compression-ratio limits"), { code: "invalid_input" });
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  const filesystem = await statfs(dirname(stagedPath));
+  const available = Number(filesystem.bavail) * Number(filesystem.bsize);
+  if (expandedBytes > Math.max(0, available - 64 * 1024 * 1024)) {
+    throw Object.assign(new Error("insufficient free space to safely extract golden config ZIP"), { code: "invalid_input" });
+  }
+}
 
-  return {
-    workspaceId: command.workspace.id,
-    extractedAt: new Date().toISOString(),
-    fileCount: Number.isFinite(fileCount) && fileCount >= 0 ? fileCount : 0,
-    warnings: parseGoldenConfigWarnings(manifestJson),
-  };
+function findZipEocd(content) {
+  const minimum = Math.max(0, content.length - 65557);
+  for (let offset = content.length - 22; offset >= minimum; offset -= 1) {
+    if (content.readUInt32LE(offset) === 0x06054b50) return offset;
+  }
+  return -1;
 }
 
 function mapIncusState(status, statusCode) {
@@ -1076,18 +1226,37 @@ function parseByteLimit(value) {
   return Math.round(amount * (multipliers[unit] || 1));
 }
 
-async function handleCommand(command, options) {
+export async function handleCommand(command, options = {}) {
+  const invalid = validateCommandEnvelope(command);
+  if (invalid) return operation(command, "failed", invalid);
   const mismatch = validateWorkspace(command);
   if (mismatch) {
     return operation(command, "failed", mismatch);
   }
-  if (command.version !== "provisioner.v1") {
-    return operation(
-      command,
-      "failed",
-      error("invalid_input", "unsupported provisioner contract version"),
-    );
+  const db = options.idempotencyDb || getIdempotencyDb();
+  const scopeKey = `${command.actor.userId}\0${command.workspace.id}\0${command.requestId}`;
+  const commandHash = createHash("sha256").update(stableJson(command)).digest("hex");
+  const prior = db.prepare("SELECT command_hash, response_json FROM provisioner_requests WHERE scope_key = ?").get(scopeKey);
+  if (prior) {
+    if (prior.command_hash !== commandHash) {
+      return operation(command, "failed", error("invalid_input", "requestId was already used with a different command"));
+    }
+    if (prior.response_json) return JSON.parse(prior.response_json);
+    return operation(command, "failed", error("operation_failed", "request outcome is still pending or was interrupted; the mutation will not be repeated", false));
   }
+  db.prepare("INSERT INTO provisioner_requests (scope_key, command_hash, created_at) VALUES (?, ?, ?)")
+    .run(scopeKey, commandHash, new Date().toISOString());
+  db.prepare(`DELETE FROM provisioner_requests WHERE scope_key IN (
+    SELECT scope_key FROM provisioner_requests WHERE response_json IS NOT NULL
+    ORDER BY created_at DESC LIMIT -1 OFFSET ?
+  )`).run(maxIdempotencyRecords);
+  const response = await executeCommand(command, options);
+  db.prepare("UPDATE provisioner_requests SET response_json = ?, completed_at = ? WHERE scope_key = ?")
+    .run(JSON.stringify(response), new Date().toISOString(), scopeKey);
+  return response;
+}
+
+async function executeCommand(command, options) {
   try {
     switch (command.type) {
       case "GetWorkspaceStatus":
@@ -1156,7 +1325,7 @@ async function handleCommand(command, options) {
           "succeeded",
           await dispatchAgentRun(command, {
             config: agentRunConfig,
-            store: agentRunStore,
+            store: getAgentRunStore(),
             incus: (args) => agentIncus(args, options),
             execInContainer: (agentRun, script) =>
               execInAgentContainer(agentRun, script, options),
@@ -1174,7 +1343,16 @@ async function handleCommand(command, options) {
           "succeeded",
           await listAgentRuns(command, {
             config: agentRunConfig,
-            store: agentRunStore,
+            store: getAgentRunStore(),
+          }),
+        );
+      case "GetAgentRun":
+        return operation(
+          command,
+          "succeeded",
+          await getAgentRun(command, {
+            config: agentRunConfig,
+            store: getAgentRunStore(),
           }),
         );
       default:
@@ -1188,11 +1366,11 @@ async function handleCommand(command, options) {
         );
     }
   } catch (err) {
-    if (err && (err.code === "invalid_input" || err.code === "golden_config_failed")) {
+    if (err && ["invalid_input", "invalid_state", "timeout", "golden_config_failed"].includes(err.code)) {
       return operation(
         command,
         "failed",
-        error(err.code, err.message, false),
+        error(err.code, err.message, err.code === "timeout"),
       );
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -1216,48 +1394,77 @@ async function handleCommand(command, options) {
   }
 }
 
-const server = createServer(async (req, res) => {
-  const controller = new AbortController();
-  const requestTimer = setTimeout(() => controller.abort(), requestTimeoutMs);
-  requestTimer.unref();
-  res.on("close", () => {
-    if (!res.writableEnded) {
-      controller.abort();
-    }
-  });
-  try {
-    if (req.method !== "POST" || req.url !== "/v1/operations") {
-      send(res, 404, { error: "not found" });
-      return;
-    }
-    if (!requireServiceAuth(req, res)) return;
-    send(res, 200, await handleCommand(await readJson(req), {
-      signal: controller.signal,
-    }));
-  } catch (err) {
-    send(res, 400, {
-      code: "invalid_input",
-      message: err instanceof Error ? err.message : "invalid request",
-      retryable: false,
-    });
-  } finally {
-    clearTimeout(requestTimer);
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
   }
-});
+  return JSON.stringify(value);
+}
 
-if (host && port > 0) {
-  assertLoopbackHost(host);
-  server.listen(port, host, () => {
-    console.log(`incus-web provisioner listening on http://${host}:${port}`);
+export function createProvisionerServer({ authToken = token, commandHandler = handleCommand } = {}) {
+  if (!authToken) throw new Error("INCUS_WEB_PROVISIONER_TOKEN is required");
+  return createServer(async (req, res) => {
+    const controller = new AbortController();
+    const requestTimer = setTimeout(() => controller.abort(), requestTimeoutMs);
+    requestTimer.unref();
+    res.on("close", () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    try {
+      if (req.method !== "POST" || req.url !== "/v1/operations") {
+        send(res, 404, { error: "not found" });
+        return;
+      }
+      if (!requireServiceAuth(req, res, authToken)) return;
+      send(res, 200, await commandHandler(await readJson(req), {
+        signal: controller.signal,
+      }));
+    } catch (err) {
+      send(res, 400, {
+        code: "invalid_input",
+        message: err instanceof Error ? err.message : "invalid request",
+        retryable: false,
+      });
+    } finally {
+      clearTimeout(requestTimer);
+    }
   });
-} else {
-  await mkdir(socketPath.split("/").slice(0, -1).join("/") || ".", {
-    recursive: true,
-    mode: 0o755,
+}
+
+export async function startProvisionerServer() {
+  token = requireConfiguredToken(
+    process.env.INCUS_WEB_PROVISIONER_TOKEN,
+    "INCUS_WEB_PROVISIONER_TOKEN",
+  );
+  const store = getAgentRunStore();
+  await reconcileAgentRuns({
+    config: agentRunConfig,
+    store,
+    incus: (args) => agentIncus(args),
+    execInContainer: (agentRun, script) => execInAgentContainer(agentRun, script),
+    readHostCredential: (container, project, path) => readContainerFile(container, project, path),
+    injectCredential: (container, project, path, content) => pushContainerFile(container, project, path, content),
+    deleteInjectedCredential: (container, project, path) => deleteContainerFile(container, project, path),
   });
-  await unlinkExistingSocket(socketPath);
-  server.listen(socketPath, async () => {
-    await chmod(socketPath, socketMode);
-    console.log(`incus-web provisioner listening on ${socketPath}`);
-  });
+  const server = createProvisionerServer({ authToken: token });
+  if (host && port > 0) {
+    assertLoopbackHost(host);
+    server.listen(port, host, () => {
+      console.log(`incus-web provisioner listening on http://${host}:${port}`);
+    });
+  } else {
+    await mkdir(dirname(socketPath), { recursive: true, mode: 0o755 });
+    await unlinkExistingSocket(socketPath);
+    server.listen(socketPath, async () => {
+      await chmod(socketPath, socketMode);
+      console.log(`incus-web provisioner listening on ${socketPath}`);
+    });
+  }
+  return server;
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  await startProvisionerServer();
 }

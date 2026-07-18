@@ -123,6 +123,15 @@ type ProvisionerCommandType =
   | "RestartWorkspace"
   | "GetWorkspaceStatus"
   | "RunSetup"
+  | "DispatchAgentRun"
+  | "ListAgentRuns"
+  | "GetAgentRun"
+  | "SetWorkspaceLimits"
+  | "SetWorkspaceMount"
+  | "ClearWorkspaceMount"
+  | "CreateWorkspaceSnapshot"
+  | "ListWorkspaceSnapshots"
+  | "ImportGoldenConfig"
 
 type ProvisionerCommand<TPayload> = {
   version: ProvisionerContractVersion

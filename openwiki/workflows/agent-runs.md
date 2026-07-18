@@ -462,7 +462,7 @@ incus copy ... && exit $?
 
 ## Related Documentation
 
-- [Provisioner Contract](domain/provisioner-contract.md) - DispatchAgentRun specification
-- [Architecture](architecture.md) - Agent run architecture
-- [Security](operations/security.md) - Credential isolation
-- [Deployment](workflows/deployment.md) - Golden container setup
+- [Provisioner Contract](../domain/provisioner-contract.md) - DispatchAgentRun specification
+- [Architecture](../architecture.md) - Agent run architecture
+- [Security](../operations/security.md) - Credential isolation
+- [Deployment](deployment.md) - Golden container setup

@@ -23,9 +23,10 @@ const TOKEN = "integration-test-token";
 function postOperations(
   socketPath: string,
   authorizationHeader: string | undefined,
+  command: unknown = {},
 ): Promise<{ status: number | undefined; body: unknown }> {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({});
+    const body = JSON.stringify(command);
     const req = request(
       {
         socketPath,
@@ -57,7 +58,7 @@ function postOperations(
   });
 }
 
-async function waitForSocket(socketPath: string, timeoutMs = 5000) {
+async function waitForSocket(socketPath: string, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -89,13 +90,15 @@ describe("provisioner-server requireServiceAuth (integration)", () => {
           INCUS_WEB_PROVISIONER_SOCKET: socketPath,
           INCUS_WEB_PROVISIONER_HOST: "",
           INCUS_WEB_PROVISIONER_PORT: "0",
+          INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
 
     await waitForSocket(socketPath);
-  }, 15000);
+  }, 30000);
 
   afterAll(async () => {
     child?.kill();
@@ -127,4 +130,59 @@ describe("provisioner-server requireServiceAuth (integration)", () => {
     // through the live socket, not just in unit isolation.
     expect(response.status).not.toBe(401);
   });
+
+  it("rejects malformed privileged commands and owner mismatches on the real socket", async () => {
+    const base = validCommand("ListAgentRuns", { limit: 20 }, "negative-matrix");
+    const cases = [
+      { ...base, unexpected: true },
+      { ...base, actor: { ...base.actor, unexpected: true } },
+      { ...base, actor: { ...base.actor, userId: "other-user" } },
+      { ...base, workspace: { ...base.workspace, ownerUserId: "other-user" } },
+      { ...base, payload: { limit: 0 } },
+      { ...base, payload: { limit: 20, unexpected: true } },
+    ];
+    for (const command of cases) {
+      const response = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
+      expect(response.body).toMatchObject({
+        status: "failed",
+        error: { code: expect.stringMatching(/invalid_input|metadata_mismatch/) },
+      });
+    }
+  });
+
+  it("durably replays a request id and rejects changed-payload reuse", async () => {
+    const command = validCommand("ListAgentRuns", { limit: 20 }, "durable-replay");
+    const first = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
+    const replay = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
+    expect(replay.body).toEqual(first.body);
+
+    const changed = await postOperations(socketPath, `Bearer ${TOKEN}`, {
+      ...command,
+      payload: { limit: 21 },
+    });
+    expect(changed.body).toMatchObject({
+      status: "failed",
+      error: { code: "invalid_input" },
+    });
+  });
 });
+
+function validCommand(type: string, payload: unknown, requestId: string) {
+  return {
+    version: "provisioner.v1",
+    requestId,
+    type,
+    actor: {
+      userId: "user-1",
+      oidcSubject: "subject-1",
+      email: "owner@example.com",
+    },
+    workspace: {
+      id: "workspace-incus-web",
+      ownerUserId: "user-1",
+      incusProject: "default",
+      incusContainer: "incus-web",
+    },
+    payload,
+  };
+}

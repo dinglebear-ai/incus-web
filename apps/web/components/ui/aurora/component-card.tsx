@@ -152,6 +152,11 @@ function TileCard({
 }: ComponentCardProps & {
   forwardedRef?: React.Ref<HTMLDivElement>;
 }) {
+  void _variant;
+  void _siblings;
+  void _onJump;
+  void _comparePreview;
+  void _compareName;
   const hasPrevNext = onPrev != null || onNext != null;
   const atStart = (index ?? 0) <= 0;
   const atEnd = total != null ? (index ?? 0) >= total - 1 : false;
@@ -335,6 +340,10 @@ function ViewerCard({
 }: ComponentCardProps & {
   forwardedRef?: React.Ref<HTMLDivElement>;
 }) {
+  void _variant;
+  void _blurb;
+  void _tags;
+  void _onOpen;
   const [comparing, setComparing] = React.useState(false);
   const selectId = React.useId();
 

@@ -390,7 +390,7 @@ Control plane would query database for ownership before allowing actions.
 
 ## Related Documentation
 
-- [Provisioner Contract](domain/provisioner-contract.md) - Command specifications
-- [Multi-Tenant Control Plane](domain/multi-tenant-control-plane.md) - Roles and permissions
-- [Architecture](architecture.md) - System architecture overview
-- [Deployment](workflows/deployment.md) - How to deploy and configure
+- [Provisioner Contract](../domain/provisioner-contract.md) - Command specifications
+- [Multi-Tenant Control Plane](../domain/multi-tenant-control-plane.md) - Roles and permissions
+- [Architecture](../architecture.md) - System architecture overview
+- [Deployment](deployment.md) - How to deploy and configure

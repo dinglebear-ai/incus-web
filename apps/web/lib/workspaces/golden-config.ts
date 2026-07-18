@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { once } from "node:events";
 
 // Must match scripts/provisioner-server.mjs's own INCUS_WEB_GOLDEN_CONFIG_DIR
 // default -- the provisioner reads back whatever this route stages here.
@@ -33,6 +35,88 @@ export function looksLikeZip(buffer: Uint8Array): boolean {
     (buffer[2] === 0x03 && buffer[3] === 0x04) ||
     (buffer[2] === 0x05 && buffer[3] === 0x06)
   );
+}
+
+export class GoldenConfigUploadError extends Error {
+  constructor(
+    message: string,
+    public readonly code: "busy" | "empty" | "invalid_zip" | "too_large",
+  ) {
+    super(message);
+  }
+}
+
+let activeUploads = 0;
+
+function maxConcurrentUploads(): number {
+  const parsed = Number.parseInt(process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_CONCURRENT_UPLOADS ?? "2", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2;
+}
+
+// Stream uploads to disk so accepted archives never exist as a second
+// process-sized Buffer. The digest and ZIP signature are computed while the
+// bytes are flowing, and a failed/cancelled request never replaces the last
+// complete staged archive.
+export async function stageGoldenConfigStream(
+  workspaceId: string,
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<{ sha256Hex: string; stagedPath: string }> {
+  if (!body) throw new GoldenConfigUploadError("golden config upload was empty", "empty");
+  if (activeUploads >= maxConcurrentUploads()) {
+    throw new GoldenConfigUploadError("too many golden config uploads are active", "busy");
+  }
+  activeUploads += 1;
+  try {
+    const dir = goldenConfigDirFromEnv();
+    await mkdir(dir, { recursive: true, mode: 0o770 });
+    const finalPath = join(dir, `${workspaceId}.zip`);
+    const tempPath = join(
+      dir,
+      `.${workspaceId}.zip.uploading-${process.pid}-${Date.now()}-${randomUUID()}`,
+    );
+    const output = createWriteStream(tempPath, { mode: 0o640, flags: "wx" });
+    const reader = body.getReader();
+    const hash = createHash("sha256");
+    const signature = new Uint8Array(4);
+    let signatureBytes = 0;
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          throw new GoldenConfigUploadError("request body exceeded the configured limit", "too_large");
+        }
+        const copyLength = Math.min(4 - signatureBytes, value.byteLength);
+        if (copyLength > 0) {
+          signature.set(value.subarray(0, copyLength), signatureBytes);
+          signatureBytes += copyLength;
+        }
+        hash.update(value);
+        if (!output.write(value)) await once(output, "drain");
+      }
+      if (total === 0) throw new GoldenConfigUploadError("golden config upload was empty", "empty");
+      if (!looksLikeZip(signature)) {
+        throw new GoldenConfigUploadError("golden config upload does not look like a zip file", "invalid_zip");
+      }
+      output.end();
+      await once(output, "close");
+      await rename(tempPath, finalPath);
+      return { sha256Hex: hash.digest("hex"), stagedPath: finalPath };
+    } catch (error) {
+      output.destroy();
+      await rm(tempPath, { force: true });
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  } finally {
+    activeUploads -= 1;
+  }
 }
 
 // Writes to a sibling temp file and renames into place so a concurrent

@@ -7,6 +7,7 @@ profile="$root/incus-web-profile.yaml"
 definition="$root/distrobuilder.yaml"
 build_image="$root/scripts/build-image.sh"
 lib="$root/scripts/incus-web-lib.sh"
+container_provision="$root/scripts/container-provision.sh"
 info_script="$root/scripts/incus-web-info.sh"
 smoke_image="$root/scripts/smoke-image.sh"
 workflow="$root/.github/workflows/build-image.yml"
@@ -16,7 +17,7 @@ env_example="$root/.env.example"
 
 require_literal() {
   local needle="$1"
-  if ! grep -Fq -- "$needle" "$deploy" "$lib"; then
+  if ! grep -Fq -- "$needle" "$deploy" "$lib" "$container_provision"; then
     printf 'missing expected deploy surface content: %s\n' "$needle" >&2
     exit 1
   fi
@@ -206,7 +207,9 @@ require_literal "incus_cmd config device override \"\$CONTAINER_NAME\" workspace
 require_literal "incus_cmd start \"\$CONTAINER_NAME\""
 require_literal "if [[ \"\${BASH_SOURCE[0]}\" == \"\$0\" ]]; then"
 require_literal "INCUS_WEB_LIB_URL="
-require_literal "raw.githubusercontent.com/jmagar/incus-web/main/scripts/incus-web-lib.sh"
+require_literal "INCUS_WEB_SOURCE_REF="
+# shellcheck disable=SC2016
+require_literal 'INCUS_WEB_RAW_BASE="https://raw.githubusercontent.com/jmagar/incus-web/$INCUS_WEB_SOURCE_REF"'
 require_literal "curl -fsSL \"\$INCUS_WEB_LIB_URL\" -o \"\$INCUS_WEB_LIB_TMP\""
 
 if ! grep -Fq -- "INCUS_WEB_PROVISIONER_TOKEN" "$root/apps/web/lib/provisioner/host-transport.ts"; then
@@ -241,6 +244,7 @@ if ! grep -Fq -- "validateIncusContainerName" "$root/apps/web/lib/provisioner/co
   printf 'missing expected imported prototype container allowance\n' >&2
   exit 1
 fi
+# shellcheck disable=SC2016
 for needle in \
   "INCUS_WEB_WORKSPACE_ID=workspace-incus-web" \
   "INCUS_WEB_INCUS_PROJECT=default" \
@@ -372,14 +376,14 @@ if ! grep -Fq -- "Incus project \`default\` and container \`incus-web\`" "$contr
   printf 'missing expected imported prototype tuple docs\n' >&2
   exit 1
 fi
-if ! grep -Fq -- "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1" "$root/README.md"; then
+if ! grep -Fq -- "ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD" "$root/README.md"; then
   printf 'missing expected remote provisioner download docs\n' >&2
   exit 1
 fi
 
 for needle in \
   "requireConfiguredToken(" \
-  "verifyBearerToken(req.headers.authorization, token)" \
+  "verifyBearerToken(req.headers.authorization, expectedToken)" \
   "INCUS_WEB_PROVISIONER_HOST must be loopback-only" \
   "unlinkExistingSocket(socketPath)" \
   "socketAcceptsConnections(path)" \
@@ -405,8 +409,8 @@ for needle in \
   fi
 done
 
-if ! grep -Fq -- "scripts/provisioner-server.mjs" "$workflow"; then
-  printf 'missing expected provisioner server workflow trigger\n' >&2
+if ! grep -Fq -- "scripts/**" "$workflow"; then
+  printf 'missing expected complete production-script workflow trigger\n' >&2
   exit 1
 fi
 
@@ -418,8 +422,8 @@ for needle in \
     exit 1
   fi
 done
-if ! grep -Fq -- "node --check scripts/provisioner-server.mjs" "$workflow"; then
-  printf 'missing expected provisioner server workflow validation\n' >&2
+if ! grep -Fq -- "find scripts -type f -name '*.mjs'" "$workflow"; then
+  printf 'missing expected production server workflow validation\n' >&2
   exit 1
 fi
 
@@ -428,8 +432,26 @@ if [[ ! -f "$lib" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$container_provision" ]]; then
+  printf 'missing tracked container provisioning program: %s\n' "$container_provision" >&2
+  exit 1
+fi
+
+for needle in \
+  'WEB_USER is required' \
+  'incus-web-setup.service' \
+  'ghostty-web.service' \
+  'wetty.service'; do
+  if ! grep -Fq -- "$needle" "$container_provision"; then
+    printf 'missing expected container provisioning content: %s\n' "$needle" >&2
+    exit 1
+  fi
+done
+
 for needle in \
   "provision_container()" \
+  "push_container_provision_program()" \
+  '/usr/local/lib/incus-web/container-provision.sh' \
   "ensure_tailscale_installed()" \
   "validate_container()" \
   "SCRIPT_DIR="; do
@@ -482,13 +504,13 @@ for needle in \
   "zsh" \
   "golang-go" \
   "rustc" \
-  "latest-v22.x" \
-  "npm install -g @anthropic-ai/claude-code" \
-  "npm install -g wetty" \
+  'node_version="22.17.0"' \
+  "npm install -g @anthropic-ai/claude-code@2.1.212" \
+  "npm install -g wetty@2.7.0" \
   "@ghostty-web/demo@0.4.0-next.20.g1858a59" \
   "ghostty-web-demo" \
-  "tailscale.com/install.sh" \
-  "npm install -g @openai/codex" \
+  "https://pkgs.tailscale.com/stable/\$tailscale_archive" \
+  "npm install -g @openai/codex@0.144.3" \
   "systemctl enable wetty.service" \
   "systemctl enable tailscaled.service"; do
   if ! grep -Fq -- "$needle" "$definition"; then
@@ -539,29 +561,32 @@ if [[ ! -f "$workflow" ]]; then
   exit 1
 fi
 
+# shellcheck disable=SC2016
 for needle in \
   "name: Build Incus image" \
   "pull_request:" \
   "runs-on: ubuntu-latest" \
   "distrobuilder.yaml" \
-  "scripts/build-image.sh" \
-  "scripts/incus-web-lib.sh" \
-  "scripts/smoke-image.sh" \
+  "scripts/**" \
+  "tests/**" \
   "bash tests/deploy_static_tests.sh" \
   "shellcheck debootstrap squashfs-tools" \
   "snap install distrobuilder --classic" \
   "sudo incus admin init --minimal" \
   "sudo -E ./scripts/build-image.sh" \
   "sudo -E ./scripts/smoke-image.sh" \
+  "permissions:" \
+  "contents: read" \
   "contents: write" \
-  "actions/upload-artifact@v4" \
+  "persist-credentials: false" \
+  "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" \
   "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" \
   "retention-days: 14" \
-  "Publish rolling latest release" \
-  "RELEASE_TAG: incus-web-agent-latest" \
-  "git tag -f \"\$RELEASE_TAG\" \"\$GITHUB_SHA\"" \
-  "git push -f origin \"\$RELEASE_TAG\"" \
-  "gh release upload \"\$RELEASE_TAG\" dist/* --clobber" \
+  "Publish immutable image release" \
+  'RELEASE_TAG: incus-web-agent-${{ github.sha }}' \
+  "git tag -f incus-web-agent-latest \"\$GITHUB_SHA\"" \
+  "git push -f origin incus-web-agent-latest" \
+  'gh release create "$RELEASE_TAG" dist/*' \
   "incus-web-agent-image"; do
   if ! grep -Fq -- "$needle" "$workflow"; then
     printf 'missing expected workflow content: %s\n' "$needle" >&2

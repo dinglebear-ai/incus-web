@@ -86,7 +86,7 @@ describe("WorkspaceDashboard", () => {
     expect(screen.queryByText("Packages")).not.toBeInTheDocument();
     expect(screen.queryByText("mise")).not.toBeInTheDocument();
     expect(screen.getAllByText("Dotfiles").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("ubuntu-24.04-code-v1")).toBeInTheDocument();
+    expect(screen.getAllByText("ubuntu-24.04-code-v1")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
     expect(

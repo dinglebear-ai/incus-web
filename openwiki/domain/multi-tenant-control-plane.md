@@ -402,7 +402,7 @@ Users with terminal access cannot:
 
 ## Related Documentation
 
-- [Provisioner Contract](domain/provisioner-contract.md) - Provisioner security boundary
-- [Workspace Lifecycle](workflows/workspace-lifecycle.md) - Workspace states and operations
-- [Security](operations/security.md) - Security model and hardening
+- [Provisioner Contract](provisioner-contract.md) - Provisioner security boundary
+- [Workspace Lifecycle](../workflows/workspace-lifecycle.md) - Workspace states and operations
+- [Security](../operations/security.md) - Security model and hardening
 - [Contract Specification](../../docs/contracts/multi-tenant-control-plane-v1.md) - Full contract spec

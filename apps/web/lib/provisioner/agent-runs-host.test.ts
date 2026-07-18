@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -14,6 +14,7 @@ import {
   dispatchAgentRun,
   executeAgentRun,
   listAgentRuns,
+  reconcileAgentRuns,
   startAgentController,
 } from "../../../../scripts/agent-runs.mjs";
 import {
@@ -78,9 +79,8 @@ describe("agent run host store", () => {
       },
     });
 
-    const stored = JSON.parse(await readFile(storePath, "utf8"));
-    expect(stored).toHaveLength(1);
-    expect(stored[0].container.name).toBe(result.run.container.name);
+    const stored = await store.get(result.run.id, "workspace-1", "user-1");
+    expect(stored?.container.name).toBe(result.run.container.name);
   });
 
   it("lists runs by workspace with newest first", async () => {
@@ -355,26 +355,24 @@ describe("agent run host store", () => {
     expect(result.status).toBe("succeeded");
   });
 
-  it("handles concurrent run-store updates without temp file collisions", async () => {
+  it("transactionally preserves concurrent appends across independent store handles", async () => {
     const storePath = await tempStorePath();
     const store = createAgentRunStore(storePath);
     const run = createAgentRun(command, config(storePath));
     await store.insert(run);
 
+    const secondStore = createAgentRunStore(storePath);
     await Promise.all(
       Array.from({ length: 25 }, (_, index) =>
-        store.update(run.id, {
-          phase: "running",
-          status: "running",
-          lastLogExcerpt: `progress ${index}`,
-        }),
+        (index % 2 === 0 ? store : secondStore).appendLog(run.id, `progress ${index}`),
       ),
     );
 
-    const stored = JSON.parse(await readFile(storePath, "utf8"));
-    expect(stored).toHaveLength(1);
-    expect(stored[0].id).toBe(run.id);
-    expect(stored[0].phase).toBe("running");
+    const stored = await secondStore.get(run.id, "workspace-1", "user-1");
+    expect(stored?.logs).toHaveLength(25);
+    expect(new Set(stored?.logs?.map((entry) => entry.message))).toEqual(
+      new Set(Array.from({ length: 25 }, (_, index) => `progress ${index}`)),
+    );
   });
 
   it("records bounded run log entries alongside the latest excerpt", async () => {
@@ -386,17 +384,63 @@ describe("agent run host store", () => {
     await store.appendLog(run.id, "first progress line");
     await store.appendLog(run.id, "second progress line", "success");
 
-    const stored = JSON.parse(await readFile(storePath, "utf8"));
-    expect(stored[0].lastLogExcerpt).toBe("second progress line");
-    expect(stored[0].logs).toMatchObject([
+    const stored = await store.get(run.id, "workspace-1", "user-1");
+    expect(stored?.lastLogExcerpt).toBe("second progress line");
+    expect(stored?.logs).toMatchObject([
       { level: "info", message: "first progress line" },
       { level: "success", message: "second progress line" },
     ]);
   });
+
+  it("replays matching dispatch request ids and rejects changed reuse", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const first = await dispatchAgentRun(command, { store, execute: false, config: config(storePath) });
+    const replay = await dispatchAgentRun(command, { store, execute: false, config: config(storePath) });
+    expect(replay.run.id).toBe(first.run.id);
+    await expect(dispatchAgentRun({
+      ...command,
+      payload: { ...command.payload, task: "different mutation" },
+    }, { store, execute: false, config: config(storePath) })).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("bounds durable admission and reconciles interrupted runs after restart", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const bounded = { ...config(storePath), maxQueuedRuns: 1, maxConcurrentRuns: 1 };
+    const queuedCommand = { ...command, payload: { ...command.payload, agent: "claude" as const } };
+    const first = await dispatchAgentRun(queuedCommand, { store, execute: false, config: bounded });
+    await expect(dispatchAgentRun({ ...queuedCommand, requestId: "queue-overflow" }, {
+      store,
+      execute: false,
+      config: bounded,
+    })).rejects.toMatchObject({ code: "timeout" });
+
+    await store.update(first.run.id, { status: "running", phase: "running" });
+    await reconcileAgentRuns({ store, config: bounded, execute: false });
+    const recovered = await store.get(first.run.id, "workspace-1", "user-1");
+    expect(recovered).toMatchObject({ status: "failed", phase: "failed" });
+    expect(recovered?.error).toContain("restarted");
+  });
+
+  it("prunes terminal history while retaining indexed active runs", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath, { historyLimit: 2 });
+    for (let index = 0; index < 3; index += 1) {
+      const run = createAgentRun({ ...command, requestId: `history-${index}` }, config(storePath));
+      await store.insert(run);
+      await store.update(run.id, { status: "failed", phase: "failed" });
+    }
+    const active = createAgentRun({ ...command, requestId: "history-active" }, config(storePath));
+    await store.insert(active);
+    const runs = await store.list("workspace-1", 100);
+    expect(runs.filter((run) => run.status === "failed")).toHaveLength(2);
+    expect(runs.some((run) => run.id === active.id)).toBe(true);
+  });
 });
 
 async function tempStorePath() {
-  return join(await mkdtemp(join(tmpdir(), "incus-web-agent-runs-")), "runs.json");
+  return join(await mkdtemp(join(tmpdir(), "incus-web-agent-runs-")), "runs.sqlite");
 }
 
 function config(storePath: string) {
