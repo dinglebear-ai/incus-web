@@ -13,6 +13,13 @@ import * as React from "react";
 
 import { Badge } from "@/components/ui/aurora/badge";
 import { Button } from "@/components/ui/aurora/button";
+import {
+  CONSOLE,
+  GlowDot,
+  logLevelColor,
+  PANEL,
+  SUBPANEL,
+} from "@/components/ui/aurora/panel-chrome";
 import { Field } from "@/components/ui/aurora/field";
 import { Input } from "@/components/ui/aurora/input";
 import { NativeSelect } from "@/components/ui/aurora/native-select";
@@ -162,14 +169,14 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
   }
 
   return (
-    <section className="overflow-hidden rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--aurora-border-default)] px-4 py-3">
-        <div className="flex items-center gap-2">
+    <section className={`${PANEL} overflow-hidden`}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--soft-edge)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_35%,transparent)] px-4 py-3">
+        <div className="flex items-center gap-2.5">
           <BotIcon
             aria-hidden="true"
             className="size-4 text-[var(--aurora-accent-primary)]"
           />
-          <h2 className="aurora-text-label text-[var(--aurora-text-primary)]">
+          <h2 className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
             Agent runs
           </h2>
         </div>
@@ -186,14 +193,14 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
       </div>
 
       {error ? (
-        <p className="border-b border-[var(--aurora-border-default)] px-4 py-2 aurora-text-body text-[var(--aurora-error)]">
+        <p className="border-b border-[var(--soft-edge)] px-4 py-2 aurora-text-body text-[var(--aurora-error)]">
           {error}
         </p>
       ) : null}
 
       <div className="grid gap-0">
         <form
-          className="space-y-3 border-b border-[var(--aurora-border-default)] p-4"
+          className="space-y-3 border-b border-[var(--soft-edge)] p-4 2xl:border-b-0 2xl:border-r 2xl:border-r-[var(--soft-edge)]"
           onSubmit={submitRun}
         >
           <Field htmlFor="agent-run-agent" label="Agent">
@@ -258,15 +265,17 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
             <AgentRunSessionViewer run={displayRun} />
           </div>
 
-          <div className="min-w-0 border-t border-[var(--aurora-border-default)]">
-            <div className="flex items-center justify-between border-b border-[var(--aurora-border-default)] px-4 py-3">
-              <p className="aurora-text-label text-[var(--aurora-text-primary)]">
+          <div className="min-w-0 border-t border-[var(--soft-edge)]">
+            <div className="flex items-center justify-between border-b border-[var(--soft-edge)] px-4 py-3">
+              <p className="font-[family-name:var(--aurora-font-display)] text-[13px] font-bold text-[var(--aurora-text-primary)]">
                 Queue
               </p>
-              <span className="aurora-text-meta">{runs.length} runs</span>
+              <span className="aurora-text-meta [font-variant-numeric:tabular-nums]">
+                {runs.length} runs
+              </span>
             </div>
             {runs.length === 0 ? (
-              <div className="m-4 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-4">
+              <div className={`m-4 p-4 ${SUBPANEL}`}>
                 <p className="aurora-text-ui">No agent runs yet</p>
               </div>
             ) : (
@@ -303,10 +312,10 @@ function AgentRunRow({
     <Link
       aria-current={selected ? "page" : undefined}
       aria-label={`Open full session viewer for ${run.id}`}
-      className={`grid cursor-pointer gap-2 border-b border-l-[3px] border-b-[var(--aurora-border-default)] p-3 text-left transition-colors hover:bg-[var(--aurora-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--aurora-accent-primary)] ${
+      className={`grid cursor-pointer gap-2 border-b border-l-[3px] border-b-[var(--soft-edge)] p-3 text-left transition-colors hover:bg-[var(--aurora-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--aurora-accent-primary)] ${
         selected
           ? "border-l-[var(--aurora-accent-primary)] bg-[color-mix(in_srgb,var(--aurora-accent-primary)_9%,var(--aurora-control-surface))]"
-          : "border-l-transparent bg-[var(--aurora-control-surface)]"
+          : "border-l-transparent"
       }`}
       href={`/workspaces/${workspaceId}/agent-runs/${run.id}`}
     >
@@ -352,7 +361,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
   if (!run) {
     return (
       <div className="grid min-h-36 place-items-center p-4">
-        <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-4 text-center">
+        <div className={`${SUBPANEL} p-4 text-center`}>
           <p className="aurora-text-ui">No session selected</p>
         </div>
       </div>
@@ -364,13 +373,14 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
 
   return (
     <div className="flex min-h-0 flex-col bg-[color-mix(in_srgb,var(--aurora-page-bg)_68%,var(--aurora-panel-medium))]">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-[var(--aurora-border-default)] px-4 py-3">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-[var(--soft-edge)] px-4 py-3">
         <div className="min-w-0 space-y-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <GlowDot color={runStatusColor(run)} size={7} />
             <Badge tone={live ? "warn" : toneForStatus(run.status)} shape="tag">
               {live ? "live" : run.status}
             </Badge>
-            <h3 className="aurora-text-label text-[var(--aurora-text-primary)]">
+            <h3 className="font-[family-name:var(--aurora-font-display)] text-[13px] font-bold text-[var(--aurora-text-primary)]">
               Session viewer
             </h3>
             <span className="aurora-text-code break-all text-[var(--aurora-text-muted)]">
@@ -395,7 +405,7 @@ export function AgentRunSessionViewer({ run }: { run?: AgentRun }) {
 
       <div className="grid min-h-0 flex-1 gap-4 overflow-auto p-4">
         <div className="min-w-0 space-y-3">
-          <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+          <div className={`${SUBPANEL} p-3`}>
             <p className="aurora-text-meta mb-1">Task</p>
             <p className="whitespace-pre-wrap break-words aurora-text-body text-[var(--aurora-text-primary)]">
               {run.task}
@@ -438,16 +448,17 @@ export function AgentRunFullSessionViewer({
   }, [autoTail, outputEntries.length, run.updatedAt]);
 
   return (
-    <section className="flex min-h-[calc(100vh-5rem)] flex-col overflow-hidden rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-panel-medium)]">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-[var(--aurora-border-default)] px-5 py-4">
+    <section className={`${PANEL} flex min-h-[calc(100vh-5rem)] flex-col overflow-hidden shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]`}>
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-[var(--soft-edge)] px-5 py-4">
         <div className="min-w-0 space-y-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+            <GlowDot color={runStatusColor(run)} size={8} />
+            <h1 className="font-[family-name:var(--aurora-font-display)] text-[19px] font-extrabold tracking-[-0.01em] text-[var(--aurora-text-primary)]">
+              Session viewer
+            </h1>
             <Badge tone={live ? "warn" : toneForStatus(run.status)} shape="tag">
               {live ? "live" : run.status}
             </Badge>
-            <h1 className="aurora-text-section text-[var(--aurora-text-primary)]">
-              Session viewer
-            </h1>
           </div>
           <p className="aurora-text-code break-all text-[var(--aurora-text-muted)]">
             {run.id}
@@ -464,24 +475,26 @@ export function AgentRunFullSessionViewer({
 
       <div className="grid min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="flex min-h-0 flex-col gap-3">
-          <div className="rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
+          <div className={`${SUBPANEL} p-3`}>
             <p className="aurora-text-meta mb-1">Task</p>
             <p className="whitespace-pre-wrap break-words aurora-text-body text-[var(--aurora-text-primary)]">
               {run.task}
             </p>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex items-center justify-between gap-3 border-b border-[var(--aurora-border-default)] pb-2">
-              <div className="flex items-center gap-1.5 text-[var(--aurora-text-muted)]">
-                <ClockIcon aria-hidden="true" className="size-3.5" />
-                <span className="aurora-text-meta">Full run log</span>
+          <div className={`${CONSOLE} flex min-h-0 flex-1 flex-col overflow-hidden`}>
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--soft-edge)] bg-[rgba(7,17,26,0.7)] px-4 py-2.5">
+              <div className="flex items-center gap-2 text-[var(--aurora-text-muted)]">
+                <GlowDot color={runStatusColor(run)} size={7} />
+                <span className="font-[family-name:var(--aurora-font-mono)] text-[11px]">
+                  {run.container.name} · full run log
+                </span>
               </div>
-              <span className="aurora-text-meta">
+              <span className="aurora-text-meta [font-variant-numeric:tabular-nums]">
                 {outputEntries.length} entries
               </span>
             </div>
-            <ol className="min-h-0 flex-1 overflow-auto rounded-b-[4px] border-x border-b border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5">
+            <ol className="min-h-0 flex-1 overflow-auto p-3 font-[family-name:var(--aurora-font-mono)] text-[12px] leading-[1.62]">
               <RunLogEntries
                 entries={outputEntries}
                 rowClassName="gap-2 lg:grid-cols-[9rem_5rem_minmax(0,1fr)]"
@@ -507,7 +520,9 @@ function RunLogList({
   rowClassName: string;
 }) {
   return (
-    <ol className={`${className} overflow-auto rounded-[4px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 text-xs leading-5`}>
+    <ol
+      className={`${className} ${CONSOLE} overflow-auto p-3 font-[family-name:var(--aurora-font-mono)] text-[12px] leading-[1.62]`}
+    >
       <RunLogEntries entries={entries} rowClassName={`gap-1 ${rowClassName}`} />
     </ol>
   );
@@ -527,15 +542,18 @@ function RunLogEntries({
   return entries.map((entry, index) => (
     <li
       key={`${entry.at}-${index}`}
-      className={`grid border-b border-[var(--aurora-border-default)] py-2 last:border-b-0 first:pt-0 last:pb-0 ${rowClassName}`}
+      className={`grid border-b border-[color-mix(in_srgb,var(--soft-edge)_60%,transparent)] py-2 last:border-b-0 first:pt-0 last:pb-0 ${rowClassName}`}
     >
-      <span className="aurora-text-code text-[var(--aurora-text-muted)]">
+      <span className="text-[var(--aurora-text-muted)] [font-variant-numeric:tabular-nums]">
         {formatTime(entry.at)}
       </span>
-      <span className="aurora-text-code text-[var(--aurora-text-muted)]">
+      <span
+        className="font-semibold uppercase tracking-[0.06em]"
+        style={{ color: logLevelColor(entry.level) }}
+      >
         {entry.level}
       </span>
-      <span className="whitespace-pre-wrap break-words text-[var(--aurora-text-primary)]">
+      <span className="whitespace-pre-wrap break-words text-[#cfe2ec]">
         {entry.message}
       </span>
     </li>
@@ -550,7 +568,7 @@ function RunDetailsList({
   className: string;
 }) {
   return (
-    <dl className={`grid content-start gap-3 rounded-[4px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3 aurora-text-body ${className}`}>
+    <dl className={`${SUBPANEL} grid content-start gap-3 p-3.5 aurora-text-body ${className}`}>
       <RunDetail label="Status" value={`${run.status} / ${run.phase}`} />
       <RunDetail
         label="Container"
@@ -668,6 +686,13 @@ function controllerLabel(run: AgentRun) {
     return run.controller.kind;
   }
   return run.agent === "codex" ? "codex-app-server:pending" : "claude-cli:pending";
+}
+
+function runStatusColor(run: AgentRun) {
+  if (run.status === "succeeded") return "var(--aurora-success)";
+  if (run.status === "failed") return "var(--aurora-error)";
+  if (run.status === "running") return "var(--aurora-accent-primary)";
+  return "var(--aurora-neutral)";
 }
 
 function toneForStatus(status: AgentRun["status"]) {

@@ -10,6 +10,11 @@ import {
   DescriptionList,
 } from "@/components/ui/aurora/description-list";
 import { Timeline, TimelineItem } from "@/components/ui/aurora/timeline";
+import {
+  PANEL,
+  PANEL_HEADER,
+  SUBPANEL,
+} from "@/components/ui/aurora/panel-chrome";
 import { apiErrorMessage } from "@/lib/api-error-message";
 import type { Workspace } from "@/lib/workspaces/types";
 
@@ -43,12 +48,15 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
   }, [workspace.id]);
 
   return (
-    <aside className="space-y-3 rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] p-4 shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
-      <div className="flex items-center gap-2">
+    <aside className={`${PANEL} overflow-hidden`}>
+      <div className={PANEL_HEADER}>
         <InfoIcon className="size-4 text-[var(--aurora-accent-primary)]" />
-        <h2 className="aurora-text-label text-[var(--aurora-text-primary)]">Inspector</h2>
+        <h2 className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
+          Inspector
+        </h2>
       </div>
 
+      <div className="space-y-3 p-4">
       <DescriptionList className="bg-transparent">
         <DescriptionItem label="Image" value={workspace.image ?? workspace.templateVersion} active />
         <DescriptionItem label="Storage pool" value={workspace.storagePool ?? "unknown"} />
@@ -65,8 +73,10 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
         </Callout>
       ) : null}
 
-      <section className="space-y-2 border-t border-[var(--aurora-border-default)] pt-3">
-        <p className="aurora-text-ui">Recent activity</p>
+      <section className="space-y-2 border-t border-[var(--soft-edge)] pt-3">
+        <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--aurora-text-muted)]">
+          Recent activity
+        </p>
         {activity.length > 0 ? (
           <Timeline>
             {activity.map((entry) => (
@@ -84,14 +94,16 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
         )}
       </section>
 
-      <section className="space-y-2 border-t border-[var(--aurora-border-default)] pt-3">
-        <p className="aurora-text-ui">Snapshots</p>
+      <section className="space-y-2 border-t border-[var(--soft-edge)] pt-3">
+        <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--aurora-text-muted)]">
+          Snapshots
+        </p>
         {snapshots.length > 0 ? (
           <div className="space-y-2">
             {snapshots.map((snapshot) => (
               <div
                 key={snapshot.name}
-                className="flex items-center justify-between gap-3 rounded-[8px] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] px-3 py-2"
+                className={`${SUBPANEL} flex items-center justify-between gap-3 px-3 py-2`}
               >
                 <span className="truncate aurora-text-code text-[var(--aurora-text-primary)]">
                   {snapshot.name}
@@ -110,6 +122,7 @@ export function WorkspaceDetailsPanel({ workspace }: { workspace: Workspace }) {
       {loadError ? (
         <Banner tone="error" kind="tag" title="Inspector data failed" description={loadError} />
       ) : null}
+      </div>
     </aside>
   );
 }

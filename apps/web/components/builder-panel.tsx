@@ -13,6 +13,11 @@ import { Item } from "@/components/ui/aurora/item";
 import { NativeSelect } from "@/components/ui/aurora/native-select";
 import { TagInput } from "@/components/ui/aurora/tag-input";
 import { Textarea } from "@/components/ui/aurora/textarea";
+import {
+  CONSOLE,
+  PANEL,
+  PANEL_HEADER,
+} from "@/components/ui/aurora/panel-chrome";
 import { apiErrorMessage } from "@/lib/api-error-message";
 import { BUILDER_DISTROS } from "@/lib/builder/distros";
 import type {
@@ -247,14 +252,17 @@ export function BuilderPanel() {
   }
 
   return (
-    <section className="space-y-4 rounded-[var(--aurora-radius-3)] border border-[var(--aurora-border-strong)] bg-[var(--aurora-panel-strong)] p-4 shadow-[var(--aurora-shadow-strong),var(--aurora-highlight-strong)]">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <HammerIcon className="size-4 text-[var(--aurora-accent-primary)]" />
-          <h2 className="aurora-text-section">Builder</h2>
-        </div>
+    <section className="space-y-3">
+      <div className="flex items-center gap-2.5">
+        <HammerIcon className="size-4 text-[var(--aurora-accent-primary)]" />
+        <h2 className="font-[family-name:var(--aurora-font-display)] text-[16px] font-bold text-[var(--aurora-text-primary)]">
+          Builder
+        </h2>
         {build ? <Badge tone={buildStatusTone(build.status)}>{build.status}</Badge> : null}
+        <div className="h-px flex-1 bg-[var(--soft-edge)]" />
       </div>
+
+      <div className={`${PANEL} space-y-4 p-4`}>
 
       <div className="grid gap-3 md:grid-cols-4">
         <Field htmlFor="builder-distro" label="Distro">
@@ -386,11 +394,29 @@ export function BuilderPanel() {
           description="Only the latest build log output is shown in this panel."
         />
       ) : null}
-      {log ? <pre className="max-h-80 overflow-auto rounded-[8px] border border-[var(--aurora-border-default)] bg-[color-mix(in_srgb,var(--aurora-page-bg)_88%,black)] p-3 aurora-text-code text-xs">{log}</pre> : null}
+      </div>
+
+      {log ? (
+        <div className={`${CONSOLE} overflow-hidden`}>
+          <div className="flex items-center gap-2 border-b border-[var(--soft-edge)] bg-[rgba(7,17,26,0.7)] px-4 py-2.5">
+            <span className="font-[family-name:var(--aurora-font-mono)] text-[11px] text-[var(--aurora-text-muted)]">
+              build log{build ? ` · ${build.status}` : ""}
+            </span>
+          </div>
+          <pre className="max-h-80 overflow-auto p-3 font-[family-name:var(--aurora-font-mono)] text-[12px] leading-[1.62] text-[#cfe2ec]">
+            {log}
+          </pre>
+        </div>
+      ) : null}
+
       <div className="grid gap-3 md:grid-cols-2">
-        <section className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-          <p className="aurora-text-ui">Images</p>
-          <div className="mt-2 space-y-2">
+        <section className={`${PANEL} overflow-hidden`}>
+          <div className={PANEL_HEADER}>
+            <p className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
+              Images
+            </p>
+          </div>
+          <div className="space-y-2 p-4">
             {images.map((image) => (
               <div key={image.imageAlias} className="flex items-center justify-between gap-2 aurora-text-meta">
                 <span>{image.imageAlias} ({image.distro}/{image.release})</span>
@@ -399,9 +425,13 @@ export function BuilderPanel() {
             ))}
           </div>
         </section>
-        <section className="rounded-[var(--aurora-radius-2)] border border-[var(--aurora-border-default)] bg-[var(--aurora-control-surface)] p-3">
-          <p className="aurora-text-ui">Presets</p>
-          <div className="mt-2 space-y-2">
+        <section className={`${PANEL} overflow-hidden`}>
+          <div className={PANEL_HEADER}>
+            <p className="font-[family-name:var(--aurora-font-display)] text-[13.5px] font-bold text-[var(--aurora-text-primary)]">
+              Presets
+            </p>
+          </div>
+          <div className="space-y-2 p-4">
             {presets.map((preset) => (
               <Item
                 key={preset.id}
