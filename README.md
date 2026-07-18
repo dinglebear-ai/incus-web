@@ -58,7 +58,7 @@ incus image import dist/incus-web-agent.tar.xz --alias incus-web-agent
 IMAGE=incus-web-agent ./deploy.sh
 ```
 
-For the durable rolling build, download `incus-web-agent.tar.xz` from the `incus-web-agent-latest` GitHub Release instead of relying on the expiring Actions artifact.
+Every main build publishes an immutable `incus-web-agent-<commit-sha>` GitHub Release with `SHA256SUMS`. The `incus-web-agent-latest` tag is only a movable pointer; select an immutable release for deployment and rollback.
 
 ## Control Plane Web App
 
@@ -78,11 +78,11 @@ npm --prefix apps/web run test
 npm --prefix apps/web run build
 ```
 
-This first slice is read-only. It reads authenticated identity from reverse-proxy/OIDC headers when present, falls back to a local development actor, and renders the current `incus-web` workspace inventory without mutating Incus state.
+The control plane reads authenticated identity from reverse-proxy/OIDC headers (or an explicit local-development actor) and supports lifecycle actions, resource limits, mounts, snapshots, golden-config import, agent runs, and isolated image builds. Ownership is enforced for every workspace command; shared-prototype configuration mutations additionally require `INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION=1`, and image builds require the build-worker authorization gate.
 
 **Identity trust is proxy-header based — `INCUS_WEB_TRUSTED_PROXY_SECRET` is mandatory before exposing this app beyond a fully-trusted network.** `apps/web/lib/auth/identity.ts` reads `x-auth-request-email` and related headers with no independent verification of their own; without a shared secret gating them (checked against an `x-incus-web-proxy-secret` header your reverse proxy must inject), a direct caller that reaches the app without going through that proxy could set those headers itself and impersonate any user. Set `INCUS_WEB_TRUSTED_PROXY_SECRET` in production — the app refuses to start serving authenticated requests without it (unless you explicitly opt out with `INCUS_WEB_ALLOW_DEV_AUTH=1` for an intentionally closed-network deployment).
 
-`GET /healthz` is deliberately excluded from that identity check — it's a deploy-time readiness probe (see `wait_for_host_web_app` in `scripts/incus-web-lib.sh`) that must succeed before the reverse proxy is even routing to this app. It returns a bare `204` with no body, so it carries no information-disclosure risk; unauthenticated request-volume limits for it are expected to live at the reverse-proxy/edge layer (e.g. SWAG), not in application code.
+`GET /healthz` is process liveness and deliberately excludes identity checks. `GET /readyz` additionally checks the durable state store and the authenticated host-provisioner boundary; deployment and monitoring use readiness before routing traffic. `GET /metrics` exposes Prometheus gauges for those dependencies and process uptime.
 
 `deploy.sh` installs the host provisioner service by default. It creates a dedicated `incus-web-provisioner` system user, grants that user Incus access through `incus-admin`, writes a group-readable environment file at `/etc/incus-web/provisioner.env`, generates or reuses `/etc/incus-web/provisioner.token` when `INCUS_WEB_PROVISIONER_TOKEN` is blank, and listens on `/run/incus-web/provisioner.sock` with mode `0660`.
 
@@ -93,9 +93,8 @@ This first slice is read-only. It reads authenticated identity from reverse-prox
 Create a working directory and a `.env` file:
 
 ```bash
-mkdir -p ~/incus-web-run
+git clone https://github.com/jmagar/incus-web.git ~/incus-web-run
 cd ~/incus-web-run
-curl -fsSLO https://raw.githubusercontent.com/jmagar/incus-web/main/.env.example
 cp .env.example .env
 chmod 600 .env
 editor .env
@@ -104,12 +103,12 @@ editor .env
 Run the deploy script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jmagar/incus-web/main/deploy.sh | bash
+./deploy.sh
 ```
 
 The script loads `.env` from the current directory.
 
-When running from a full local checkout, `deploy.sh` installs the host provisioner from `./scripts/provisioner-server.mjs`. When curl-piping `deploy.sh`, set `ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1` only if you intentionally want deploy to fetch that host service entrypoint from `INCUS_WEB_PROVISIONER_SERVER_URL`; otherwise set `ENABLE_HOST_PROVISIONER=0`.
+`deploy.sh` derives an immutable source commit from the checkout. Remote component downloads require an explicit 40-character `INCUS_WEB_SOURCE_REF`; mutable branch URLs are rejected.
 
 Rerunning `deploy.sh` is safe after a partial or successful run. By default it reuses the existing container and reruns provisioning, Tailscale Serve setup, and validation. Set `RECREATE=1` in `.env`, or run with `FORCE_RECREATE=1`, to delete and rebuild the container.
 
@@ -263,6 +262,7 @@ Important variables:
 ```bash
 mkdir -p ~/incus-web-demo
 cd ~/incus-web-demo
+git clone https://github.com/jmagar/incus-web.git .
 cat >.env <<'EOF'
 TS_AUTHKEY=tskey-auth-your-key
 CONTAINER_NAME=incus-web-demo
@@ -272,7 +272,7 @@ CONTAINER_WORKSPACE=/workspace
 RECREATE=1
 EOF
 chmod 600 .env
-curl -fsSL https://raw.githubusercontent.com/jmagar/incus-web/main/deploy.sh | bash
+./deploy.sh
 ```
 
 When it finishes, open the Tailscale HTTPS URL for `TS_HOSTNAME`. The script also prints `tailscale serve status` from inside the container.
@@ -293,7 +293,7 @@ OIDC_HOST_PORT=4180
 RECREATE=1
 EOF
 chmod 600 .env
-curl -fsSL https://raw.githubusercontent.com/jmagar/incus-web/main/deploy.sh | bash
+./deploy.sh
 ```
 
 Configure the OIDC app callback as `https://incus-web.example.com/oauth2/callback`. The example above binds oauth2-proxy to `127.0.0.1:4180` on the host with an Incus proxy device, so a host-level TLS proxy can publish `PUBLIC_URL` while OIDC enforcement stays inside the container.

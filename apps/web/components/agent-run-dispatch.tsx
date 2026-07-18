@@ -55,11 +55,12 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
     : undefined;
   const displayRun = selectedRun ?? runs[0];
 
-  const refreshRuns = React.useCallback(async () => {
+  const refreshRuns = React.useCallback(async (signal?: AbortSignal) => {
     setLoadingRuns(true);
     try {
       const response = await fetch(`/api/workspaces/${workspace.id}/agent-runs`, {
         headers: { "Cache-Control": "no-store" },
+        signal,
       });
       const body = await response.json().catch(() => undefined);
       if (!response.ok || body?.ok !== true) {
@@ -71,6 +72,7 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
       }
       setRuns(Array.isArray(body.runs) ? body.runs : []);
     } catch (refreshError) {
+      if (signal?.aborted) return;
       setError(
         refreshError instanceof Error
           ? refreshError.message
@@ -82,15 +84,25 @@ export function AgentRunDispatch({ workspace }: { workspace: Workspace }) {
   }, [workspace.id]);
 
   React.useEffect(() => {
-    void Promise.resolve().then(refreshRuns);
+    void Promise.resolve().then(() => refreshRuns());
   }, [refreshRuns]);
 
   React.useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => {
-      void refreshRuns();
-    }, 3000);
-    return () => window.clearInterval(timer);
+    let timer: number | undefined;
+    let cancelled = false;
+    let controller: AbortController | undefined;
+    const poll = async () => {
+      controller = new AbortController();
+      await refreshRuns(controller.signal);
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 3000);
+    };
+    timer = window.setTimeout(() => void poll(), 3000);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [active, refreshRuns]);
 
   React.useEffect(() => {

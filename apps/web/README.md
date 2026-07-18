@@ -1,36 +1,27 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# incus-web control plane
 
-## Getting Started
+Next.js 16/React 19 control plane for Incus workspaces. The UI uses the Aurora design system and communicates with the host provisioner and optional image-build worker over authenticated Unix sockets; it is not a standalone Vercel application.
 
-First, run the development server:
+## Development
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run lint
+npm run test
+npm run test:coverage
+npm run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+For an intentionally local static prototype, configure `INCUS_WEB_DEV_ACTOR_USER_ID`, `INCUS_WEB_DEV_ACTOR_EMAIL`, and `INCUS_WEB_WORKSPACE_OWNER_MODE=none`. Production uses trusted reverse-proxy identity headers plus `INCUS_WEB_TRUSTED_PROXY_SECRET`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Host-backed mode requires `INCUS_WEB_PROVISIONER_TOKEN` and `INCUS_WEB_PROVISIONER_SOCKET` (normally `/run/incus-web/provisioner.sock`). Builder features additionally require the build-worker token/socket and explicit actor/action gates. See the root `.env.example` and `openwiki/operations/configuration.md` for the complete reference.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Browser tests
 
-## Learn More
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The Playwright suite runs desktop/mobile Chromium and axe accessibility checks. Deployment is managed by the root `deploy.sh`, which builds a staged runtime and installs the hardened `incus-web-app.service` systemd unit.

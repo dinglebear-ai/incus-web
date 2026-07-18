@@ -149,3 +149,4 @@ describe("workspace actions route", () => {
     await expect(response.json()).resolves.toMatchObject({ ok: false });
   });
 });
+// @vitest-environment node

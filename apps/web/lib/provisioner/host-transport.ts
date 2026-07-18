@@ -21,7 +21,20 @@ export type HostProvisionerTransportConfig = {
 };
 
 const defaultSocketPath = "/run/incus-web/provisioner.sock";
-const defaultTimeoutMs = 10_000;
+// The host command budget defaults to 30s. The transport remains alive for
+// two additional seconds so the provisioner can return its contract-shaped
+// timeout response instead of creating an ambiguous client-side disconnect.
+const defaultCommandBudgetMs = 30_000;
+const transportGraceMs = 2_000;
+
+function configuredTransportTimeoutMs() {
+  const explicit = process.env.INCUS_WEB_PROVISIONER_TRANSPORT_TIMEOUT_MS;
+  if (explicit) return positiveNumber(explicit, "INCUS_WEB_PROVISIONER_TRANSPORT_TIMEOUT_MS");
+  const budget = process.env.INCUS_WEB_PROVISIONER_TIMEOUT_MS
+    ? positiveNumber(process.env.INCUS_WEB_PROVISIONER_TIMEOUT_MS, "INCUS_WEB_PROVISIONER_TIMEOUT_MS")
+    : defaultCommandBudgetMs;
+  return budget + transportGraceMs;
+}
 
 export function hostProvisionerConfigFromEnv():
   | HostProvisionerTransportConfig
@@ -37,7 +50,7 @@ export function hostProvisionerConfigFromEnv():
     return {
       token,
       url,
-      timeoutMs: numberEnv("INCUS_WEB_PROVISIONER_TIMEOUT_MS", defaultTimeoutMs),
+      timeoutMs: configuredTransportTimeoutMs(),
     };
   }
 
@@ -45,7 +58,7 @@ export function hostProvisionerConfigFromEnv():
     token,
     socketPath:
       process.env.INCUS_WEB_PROVISIONER_SOCKET?.trim() || defaultSocketPath,
-    timeoutMs: numberEnv("INCUS_WEB_PROVISIONER_TIMEOUT_MS", defaultTimeoutMs),
+    timeoutMs: configuredTransportTimeoutMs(),
   };
 }
 
@@ -73,7 +86,7 @@ export class HostProvisionerTransport implements ProvisionerTransport {
     this.#config = {
       ...config,
       token,
-      timeoutMs: config.timeoutMs ?? defaultTimeoutMs,
+      timeoutMs: config.timeoutMs ?? configuredTransportTimeoutMs(),
     };
   }
 
@@ -194,11 +207,7 @@ function assertLocalUrl(value: string) {
   }
 }
 
-function numberEnv(name: string, fallback: number): number {
-  const value = process.env[name];
-  if (!value) {
-    return fallback;
-  }
+function positiveNumber(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive number`);

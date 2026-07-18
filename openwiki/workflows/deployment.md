@@ -27,9 +27,8 @@ If Incus is missing, `deploy.sh` installs it via `apt-get` and initializes with 
 Create a working directory and configure secrets:
 
 ```bash
-mkdir -p ~/incus-web-run
+git clone https://github.com/jmagar/incus-web.git ~/incus-web-run
 cd ~/incus-web-run
-curl -fsSLO https://raw.githubusercontent.com/jmagar/incus-web/main/.env.example
 cp .env.example .env
 chmod 600 .env
 editor .env
@@ -59,14 +58,15 @@ OIDC_EMAIL_DOMAINS=example.com,another.com  # Optional
 
 From repository:
 ```bash
-git clone https://github.com/jmagar/incus-web.git
-cd incus-web
 ./deploy.sh
 ```
 
-Or remotely:
+To deploy a reviewed immutable revision:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jmagar/incus-web/main/deploy.sh | bash
+git clone https://github.com/jmagar/incus-web.git
+cd incus-web
+git checkout <reviewed-40-character-commit-sha>
+./deploy.sh
 ```
 
 ### 4. Access the Terminal
@@ -138,7 +138,7 @@ See `.env.example` for complete reference. Key variables:
 - `INCUS_WEB_INCUS_CONTAINER=$CONTAINER_NAME`
 
 **Agent runs:**
-- `INCUS_WEB_AGENT_RUN_STORE_PATH=/var/lib/incus-web/agent-runs.json`
+- `INCUS_WEB_AGENT_RUN_STORE_PATH=/var/lib/incus-web/agent-runs.sqlite`
 - `INCUS_WEB_AGENT_GOLDEN_CONTAINER=incus-web-agent-golden`
 - `INCUS_WEB_AGENT_CREDENTIAL_SOURCE_CONTAINER=$CONTAINER_NAME`
 - `INCUS_WEB_CODEX_APP_SERVER_URL` - Codex app-server endpoint
@@ -152,7 +152,7 @@ See `.env.example` for complete reference. Key variables:
 **Host web app:**
 - `ENABLE_HOST_WEB_APP=1` - Auto-detects if `apps/web/package.json` exists
 - `INCUS_WEB_APP_HOST=127.0.0.1`
-- `INCUS_WEB_APP_PORT=3001`
+- `INCUS_WEB_APP_PORT=3090`
 - `INCUS_WEB_APP_NPM=/usr/bin/npm`
 
 **Workspace ownership (prototype):**
@@ -213,7 +213,7 @@ incus launch images:debian/trixie $CONTAINER_NAME \
 
 Overrides workspace mount source:
 - Default: `/srv/incus-web/default-workspace`
-- Configurable via env: `WORKSPACE_HOST_PATH`
+- Configurable via env: `HOST_WORKSPACE`
 
 ### 5. Container Provisioning
 
@@ -265,11 +265,9 @@ incus exec $CONTAINER_NAME -- bash -c "
 
 **Tailscale mode:**
 ```bash
-incus exec $CONTAINER_NAME -- sh -c "
-  curl -fsSL https://tailscale.com/install.sh | sh
-  echo 'ts_authkey:$TS_AUTHKEY' | incus exec $CONTAINER_NAME -- tailscale up --authkey $TS_AUTHKEY --hostname $TS_HOSTNAME
-  incus exec $CONTAINER_NAME -- tailscale serve --https=$TAILSCALE_SERVE_PORT
-"
+# deploy.sh installs the pinned, checksum-verified Tailscale archive and
+# configures tailscale up/serve from ACCESS_MODE=tailscale settings.
+./deploy.sh
 ```
 
 **OIDC mode:**
@@ -398,7 +396,7 @@ User=incus-web-app
 Group=incus-web
 EnvironmentFile=/etc/incus-web/web.env
 WorkingDirectory=/usr/local/lib/incus-web/app
-ExecStart=/usr/bin/node_modules/.bin/next start
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3090
 Environment="NODE_ENV=production"
 Environment="PORT=$INCUS_WEB_APP_PORT"
 StandardOutput=journal
@@ -490,7 +488,7 @@ curl --unix-socket /run/incus-web/provisioner.sock http://localhost/healthz
 ```bash
 sudo systemctl status incus-web-app
 sudo journalctl -u incus-web-app -f
-curl http://127.0.0.1:3001/healthz
+curl http://127.0.0.1:3090/readyz
 ```
 
 ### Test Access
@@ -545,7 +543,7 @@ incus exec $CONTAINER_NAME -- journalctl -u tailscale -f
 
 ## Related Documentation
 
-- [Configuration](operations/configuration.md) - Complete environment variable reference
-- [Security](operations/security.md) - Security model and hardening
-- [Architecture](architecture.md) - System architecture overview
-- [Testing](operations/testing.md) - Static tests and smoke tests
+- [Configuration](../operations/configuration.md) - Complete environment variable reference
+- [Security](../operations/security.md) - Security model and hardening
+- [Architecture](../architecture.md) - System architecture overview
+- [Testing](../operations/testing.md) - Static tests and smoke tests

@@ -42,6 +42,16 @@ describe("getActorFromHeaders", () => {
     expect(actor.email).toBe("dev@incus-web.local");
   });
 
+  it("generates a unique request id when the proxy does not provide one", () => {
+    vi.stubEnv("NODE_ENV", "development");
+
+    const first = getActorFromHeaders(new Headers());
+    const second = getActorFromHeaders(new Headers());
+
+    expect(first.requestId).toMatch(/^local-[0-9a-f-]{36}$/);
+    expect(second.requestId).not.toBe(first.requestId);
+  });
+
   it("fails closed in production when no identity headers are present", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("INCUS_WEB_ALLOW_DEV_AUTH", "");

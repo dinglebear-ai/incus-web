@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -53,7 +54,6 @@ const CLAUDE_INCLUDES = [
 
 const CODEX_INCLUDES = [
   { path: "config.toml" },
-  { path: "auth.json", optional: true },
   { path: "AGENTS.md", optional: true },
   { path: "hooks.json", optional: true },
   { path: "agents", type: "dir", optional: true },
@@ -267,6 +267,14 @@ async function main() {
   const stagingDir = await mkdtemp(join(tmpdir(), "incus-onboarding-"));
 
   try {
+    const codexAuthPath = join(opts.codexDir, "auth.json");
+    if (await pathExists(codexAuthPath)) {
+      log.skipped.push({
+        path: codexAuthPath,
+        reason: "excluded live authentication credentials",
+      });
+      log.warnings.push("codex: auth.json was excluded because it contains live credentials");
+    }
     await collectSource("claude", opts.claudeDir, CLAUDE_INCLUDES, stagingDir, log);
     await collectSource("codex", opts.codexDir, CODEX_INCLUDES, stagingDir, log);
 
@@ -288,6 +296,7 @@ async function main() {
       await rm(outPath);
     }
     await runZip(stagingDir, outPath);
+    await chmod(outPath, 0o600);
 
     console.log(`Wrote ${outPath}`);
     console.log(`  included: ${log.included.length} files`);

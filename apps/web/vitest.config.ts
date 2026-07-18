@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -9,6 +9,17 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    passWithNoTests: true,
+    exclude: [...configDefaults.exclude, "e2e/**"],
+    coverage: {
+      provider: "v8",
+      include: ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}", "lib/**/*.{ts,tsx}"],
+      exclude: ["components/ui/aurora/**"],
+      thresholds: {
+        lines: 45,
+        functions: 45,
+        statements: 45,
+        branches: 35,
+      },
+    },
   },
 });

@@ -48,7 +48,7 @@ function postOperations(
   });
 }
 
-async function waitForSocket(socketPath: string, timeoutMs = 5000) {
+async function waitForSocket(socketPath: string, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -67,7 +67,7 @@ async function waitForSocket(socketPath: string, timeoutMs = 5000) {
 // proceed to a real `incus file push` invocation, and this suite asserts
 // that happens without ever risking a mutation against a real, possibly-
 // in-use container.
-const nonexistentContainer = "incus-web-integration-test-does-not-exist";
+const nonexistentContainer = "ws-integration-test-does-not-exist";
 
 describe("provisioner-server ImportGoldenConfig (integration)", () => {
   let tempDir: string;
@@ -96,17 +96,23 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
           ...process.env,
           INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
           INCUS_WEB_PROVISIONER_SOCKET: socketPath,
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
+          INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
           INCUS_WEB_PROVISIONER_HOST: "",
           INCUS_WEB_PROVISIONER_PORT: "0",
           INCUS_WEB_INCUS_CONTAINER: nonexistentContainer,
           INCUS_WEB_GOLDEN_CONFIG_DIR: goldenConfigDir,
+          INCUS_WEB_GOLDEN_CONFIG_MAX_ENTRIES: "3",
+          INCUS_WEB_GOLDEN_CONFIG_MAX_EXPANDED_BYTES: "1024",
+          INCUS_WEB_GOLDEN_CONFIG_MAX_COMPRESSION_RATIO: "10",
+          INCUS_WEB_GOLDEN_CONFIG_MAX_DEPTH: "4",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
 
     await waitForSocket(socketPath);
-  }, 15000);
+  }, 30000);
 
   afterAll(async () => {
     child?.kill();
@@ -126,6 +132,10 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
       workspace,
       payload,
     };
+  }
+
+  function stagedPathForHash(sha256Hex: string) {
+    return join(goldenConfigDir, `${workspace.id}-${sha256Hex.toLowerCase()}.zip`);
   }
 
   it("rejects a malformed sha256Hex with invalid_input, proving the server re-validates independently of the web app's own validation", async () => {
@@ -156,10 +166,9 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
   });
 
   it("rejects an import when the staged file's content does not match the declared hash", async () => {
-    const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
-    await writeFile(stagedPath, Buffer.from("not actually a zip"));
-
     const wrongHash = "1".repeat(64);
+    const stagedPath = stagedPathForHash(wrongHash);
+    await writeFile(stagedPath, Buffer.from("not actually a zip"));
     const response = await postOperations(
       socketPath,
       baseCommand("req-3", { sha256Hex: wrongHash }),
@@ -170,13 +179,14 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
       status: "failed",
       error: { code: "invalid_input" },
     });
+    await expect(access(stagedPath)).rejects.toThrow();
   });
 
   it("proceeds past hash verification and attempts a real `incus file push` for a correctly-hashed staged file, instead of silently no-op'ing", async () => {
-    const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
-    const content = Buffer.from("pretend this is a zip file");
-    await writeFile(stagedPath, content);
+    const content = centralDirectoryZip([{ name: "claude/settings.json", compressed: 10, expanded: 10 }]);
     const sha256Hex = createHash("sha256").update(content).digest("hex");
+    const stagedPath = stagedPathForHash(sha256Hex);
+    await writeFile(stagedPath, content);
 
     const response = await postOperations(socketPath, baseCommand("req-4", { sha256Hex }));
 
@@ -190,5 +200,148 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
       status: "failed",
       error: { code: "incus_unavailable" },
     });
+    await expect(access(stagedPath)).rejects.toThrow();
+  });
+
+  it("accepts the contract's case-insensitive sha256Hex and resolves its lowercase content address", async () => {
+    const content = centralDirectoryZip([{ name: "claude/settings.json", compressed: 10, expanded: 10 }]);
+    const sha256Hex = createHash("sha256").update(content).digest("hex");
+    const stagedPath = stagedPathForHash(sha256Hex);
+    await writeFile(stagedPath, content);
+
+    const response = await postOperations(
+      socketPath,
+      baseCommand("req-uppercase", { sha256Hex: sha256Hex.toUpperCase() }),
+    );
+
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "incus_unavailable" },
+    });
+    await expect(access(stagedPath)).rejects.toThrow();
+  });
+
+  it("rejects unsafe, secret-bearing, excessive, and zip-bomb metadata before Incus and cleans staging", async () => {
+    const cases = [
+      centralDirectoryZip([{ name: "../escape", compressed: 1, expanded: 1 }]),
+      centralDirectoryZip([{ name: "codex/auth.json", compressed: 1, expanded: 1 }]),
+      centralDirectoryZip([{ name: "claude/huge", compressed: 1, expanded: 100 }]),
+      centralDirectoryZip([
+        { name: "a", compressed: 1, expanded: 1 },
+        { name: "b", compressed: 1, expanded: 1 },
+        { name: "c", compressed: 1, expanded: 1 },
+        { name: "d", compressed: 1, expanded: 1 },
+      ]),
+    ];
+    for (const [index, content] of cases.entries()) {
+      const sha256Hex = createHash("sha256").update(content).digest("hex");
+      const stagedPath = stagedPathForHash(sha256Hex);
+      await writeFile(stagedPath, content);
+      const response = await postOperations(socketPath, baseCommand(`unsafe-${index}`, { sha256Hex }));
+      expect(response.body).toMatchObject({ status: "failed", error: { code: "invalid_input" } });
+      await expect(access(stagedPath)).rejects.toThrow();
+    }
+  }, 15_000);
+
+  it("bounds concurrent imports while streaming staged archives to Incus", async () => {
+    const isolated = await mkdtemp(join(tmpdir(), "incus-web-golden-concurrency-"));
+    const isolatedGolden = join(isolated, "golden-config");
+    const bin = join(isolated, "bin");
+    const isolatedSocket = join(isolated, "provisioner.sock");
+    await mkdir(isolatedGolden, { recursive: true });
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "incus"),
+      `#!/bin/sh
+set -eu
+case " $* " in
+  *" file push "*) cat >/dev/null; sleep 0.5 ;;
+  *" exec "*) printf '0___INCUS_WEB_GOLDEN_CONFIG_MANIFEST___{}' ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const isolatedChild = spawn(
+      process.execPath,
+      [join(currentDir, "../../../../scripts/provisioner-server.mjs")],
+      {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
+          INCUS_WEB_PROVISIONER_SOCKET: isolatedSocket,
+          INCUS_WEB_PROVISIONER_HOST: "",
+          INCUS_WEB_PROVISIONER_PORT: "0",
+          INCUS_WEB_PROVISIONER_STATE_DB: join(isolated, "provisioner.sqlite"),
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(isolated, "agent-runs.sqlite"),
+          INCUS_WEB_GOLDEN_CONFIG_DIR: isolatedGolden,
+          INCUS_WEB_GOLDEN_CONFIG_MAX_CONCURRENT_IMPORTS: "1",
+          INCUS_WEB_INCUS_CONTAINER: nonexistentContainer,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      await waitForSocket(isolatedSocket);
+      const contents = [
+        centralDirectoryZip([{ name: "claude/first.json", compressed: 1, expanded: 1 }]),
+        centralDirectoryZip([{ name: "claude/second.json", compressed: 1, expanded: 1 }]),
+      ];
+      const hashes = contents.map((content) => createHash("sha256").update(content).digest("hex"));
+      await Promise.all(
+        contents.map((content, index) =>
+          writeFile(join(isolatedGolden, `${workspace.id}-${hashes[index]}.zip`), content),
+        ),
+      );
+
+      const responses = await Promise.all(
+        hashes.map((sha256Hex, index) =>
+          postOperations(isolatedSocket, baseCommand(`concurrent-${index}`, { sha256Hex })),
+        ),
+      );
+      expect(
+        responses.filter((response) => (response.body as { status?: string }).status === "succeeded"),
+        JSON.stringify(responses),
+      )
+        .toHaveLength(1);
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({ code: "timeout" }),
+          }),
+        }),
+      );
+    } finally {
+      isolatedChild.kill();
+      await rm(isolated, { recursive: true, force: true });
+    }
   });
 });
+
+function centralDirectoryZip(
+  entries: Array<{ name: string; compressed: number; expanded: number; externalAttributes?: number }>,
+) {
+  const records = entries.map((entry) => {
+    const name = Buffer.from(entry.name, "utf8");
+    const record = Buffer.alloc(46 + name.length);
+    record.writeUInt32LE(0x02014b50, 0);
+    record.writeUInt16LE(0x031e, 4);
+    record.writeUInt16LE(20, 6);
+    record.writeUInt32LE(entry.compressed, 20);
+    record.writeUInt32LE(entry.expanded, 24);
+    record.writeUInt16LE(name.length, 28);
+    record.writeUInt32LE(entry.externalAttributes ?? 0, 38);
+    name.copy(record, 46);
+    return record;
+  });
+  const central = Buffer.concat(records);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(0, 16);
+  return Buffer.concat([central, eocd]);
+}

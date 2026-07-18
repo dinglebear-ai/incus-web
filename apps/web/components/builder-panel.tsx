@@ -51,6 +51,7 @@ export function BuilderPanel() {
   const pollTimerRef = useRef<number | undefined>(undefined);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const logLengthRef = useRef(0);
+  const lastPollRef = useRef<{ buildId: string; offset: number } | undefined>(undefined);
   const releases = useMemo(
     () => BUILDER_DISTROS.find((entry) => entry.id === distro)?.releases ?? [],
     [distro],
@@ -110,7 +111,8 @@ export function BuilderPanel() {
     }
   }
 
-  async function pollBuild(buildId: string, offset: number) {
+  async function pollBuild(buildId: string, offset: number, retry = 0) {
+    lastPollRef.current = { buildId, offset };
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -124,6 +126,7 @@ export function BuilderPanel() {
         throw new Error(apiErrorMessage(body, "build status failed"));
       }
       const result = body.operation.result as GetBuildStatusResult;
+      setMessage(undefined);
       setBuild(result);
       const chunk = result.logChunk || "";
       if (logLengthRef.current + chunk.length > MAX_LOG_CHARS) {
@@ -144,7 +147,11 @@ export function BuilderPanel() {
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        setMessage(error instanceof Error ? error.message : "build status failed");
+        setMessage(`${error instanceof Error ? error.message : "build status failed"}; retrying`);
+        pollTimerRef.current = window.setTimeout(
+          () => void pollBuild(buildId, offset, Math.min(retry + 1, 4)),
+          Math.min(30_000, 2_500 * 2 ** retry),
+        );
       }
     }
   }
@@ -352,7 +359,25 @@ export function BuilderPanel() {
       >
         Build image
       </Button>
-      {message ? <Banner tone={message.toLowerCase().includes("failed") ? "error" : "info"} kind="tag" title={message} /> : null}
+      {message ? (
+        <Banner
+          tone={message.toLowerCase().includes("failed") ? "error" : "info"}
+          kind="tag"
+          title={message}
+          action={lastPollRef.current ? (
+            <Button
+              size="sm"
+              variant="neutral"
+              onClick={() => {
+                const current = lastPollRef.current;
+                if (current) void pollBuild(current.buildId, current.offset);
+              }}
+            >
+              Resume status
+            </Button>
+          ) : undefined}
+        />
+      ) : null}
       {logTruncated ? (
         <Banner
           tone="warn"

@@ -1,4 +1,7 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+// @vitest-environment node
+
+import { existsSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -14,6 +17,7 @@ import {
   dispatchAgentRun,
   executeAgentRun,
   listAgentRuns,
+  reconcileAgentRuns,
   startAgentController,
 } from "../../../../scripts/agent-runs.mjs";
 import {
@@ -78,9 +82,8 @@ describe("agent run host store", () => {
       },
     });
 
-    const stored = JSON.parse(await readFile(storePath, "utf8"));
-    expect(stored).toHaveLength(1);
-    expect(stored[0].container.name).toBe(result.run.container.name);
+    const stored = await store.get(result.run.id, "workspace-1", "user-1");
+    expect(stored?.container.name).toBe(result.run.container.name);
   });
 
   it("lists runs by workspace with newest first", async () => {
@@ -187,6 +190,61 @@ describe("agent run host store", () => {
     }
   });
 
+  it("rejects an oversized Codex app-server WebSocket handshake", async () => {
+    const server = await createMalformedCodexAppServer((socket) => {
+      socket.write(Buffer.alloc(1024 * 1024 + 1, "a"));
+    });
+    try {
+      const client = createCodexAppServerClient({ url: server.url, token: "", timeoutMs: 3000 });
+      await expect(client.startTurn({ cwd: "/workspace/repo", task: "Run tests" })).rejects.toThrow(
+        "handshake exceeded 1 MiB",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("closes early when a WebSocket frame declares an oversized payload", async () => {
+    const server = await createMalformedCodexAppServer((socket, headers) => {
+      writeServerHandshake(socket, headers);
+      setTimeout(() => {
+        const frameHeader = Buffer.alloc(10);
+        frameHeader[0] = 0x81;
+        frameHeader[1] = 127;
+        frameHeader.writeUInt32BE(0, 2);
+        frameHeader.writeUInt32BE(1024 * 1024 + 1, 6);
+        socket.write(frameHeader);
+      }, 10);
+    });
+    try {
+      const client = createCodexAppServerClient({ url: server.url, token: "", timeoutMs: 3000 });
+      await expect(client.startTurn({ cwd: "/workspace/repo", task: "Run tests" })).rejects.toThrow(
+        "connection closed",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("caps aggregate payload bytes across fragmented WebSocket messages", async () => {
+    const server = await createMalformedCodexAppServer((socket, headers) => {
+      writeServerHandshake(socket, headers);
+      setTimeout(() => {
+        const fragment = Buffer.alloc(600 * 1024, "a");
+        socket.write(encodeServerFrame(0x1, false, fragment));
+        socket.write(encodeServerFrame(0x0, true, fragment));
+      }, 10);
+    });
+    try {
+      const client = createCodexAppServerClient({ url: server.url, token: "", timeoutMs: 3000 });
+      await expect(client.startTurn({ cwd: "/workspace/repo", task: "Run tests" })).rejects.toThrow(
+        "connection closed",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("fails with an actionable error when the source credential is missing", async () => {
     const storePath = await tempStorePath();
     const store = createAgentRunStore(storePath);
@@ -259,12 +317,16 @@ describe("agent run host store", () => {
 
     const injectCalls: unknown[] = [];
     const deleteCalls: unknown[] = [];
+    const incusCalls: unknown[] = [];
     const credentialContent = JSON.stringify({ claudeAiOauth: { accessToken: "x" } });
 
     const result = await executeAgentRun(run, {
       config: { ...config(storePath), credentialSourceContainer: "incus-web" },
       store,
-      incus: async () => "",
+      incus: async (...args: unknown[]) => {
+        incusCalls.push(args);
+        return "";
+      },
       execInContainer: async () => "",
       readHostCredential: async (container: string, project: string, path: string) => {
         expect(container).toBe("incus-web");
@@ -286,6 +348,14 @@ describe("agent run host store", () => {
     expect(deleteCalls).toEqual([
       [run.container.name, run.container.project, "/root/.claude/.credentials.json"],
     ]);
+    expect(incusCalls).toContainEqual([[
+      "--project",
+      run.container.project,
+      "delete",
+      run.container.name,
+      "--force",
+    ]]);
+    expect(result.container.state).toBe("deleted");
   });
 
   it("still cleans up the injected credential when the agent controller fails", async () => {
@@ -298,13 +368,17 @@ describe("agent run host store", () => {
     await store.insert(run);
 
     const deleteCalls: unknown[] = [];
+    const incusCalls: unknown[] = [];
     let execCount = 0;
 
     await expect(
       executeAgentRun(run, {
         config: config(storePath),
         store,
-        incus: async () => "",
+        incus: async (...args: unknown[]) => {
+          incusCalls.push(args);
+          return "";
+        },
         execInContainer: async () => {
           execCount += 1;
           // First call is the repo clone (must succeed); second call is
@@ -324,6 +398,13 @@ describe("agent run host store", () => {
     ).rejects.toThrow("claude -p failed inside container");
 
     expect(deleteCalls).toHaveLength(1);
+    expect(incusCalls).toContainEqual([[
+      "--project",
+      run.container.project,
+      "delete",
+      run.container.name,
+      "--force",
+    ]]);
   });
 
   it("retries once on a torn/invalid JSON read before giving up", async () => {
@@ -355,26 +436,51 @@ describe("agent run host store", () => {
     expect(result.status).toBe("succeeded");
   });
 
-  it("handles concurrent run-store updates without temp file collisions", async () => {
+  it("transactionally preserves concurrent appends across independent store handles", async () => {
     const storePath = await tempStorePath();
     const store = createAgentRunStore(storePath);
     const run = createAgentRun(command, config(storePath));
     await store.insert(run);
 
+    const secondStore = createAgentRunStore(storePath);
     await Promise.all(
       Array.from({ length: 25 }, (_, index) =>
-        store.update(run.id, {
-          phase: "running",
-          status: "running",
-          lastLogExcerpt: `progress ${index}`,
-        }),
+        (index % 2 === 0 ? store : secondStore).appendLog(run.id, `progress ${index}`),
       ),
     );
 
-    const stored = JSON.parse(await readFile(storePath, "utf8"));
-    expect(stored).toHaveLength(1);
-    expect(stored[0].id).toBe(run.id);
-    expect(stored[0].phase).toBe("running");
+    const stored = await secondStore.get(run.id, "workspace-1", "user-1");
+    expect(stored?.logs).toHaveLength(25);
+    expect(new Set(stored?.logs?.map((entry) => entry.message))).toEqual(
+      new Set(Array.from({ length: 25 }, (_, index) => `progress ${index}`)),
+    );
+  });
+
+  it("migrates the previous default JSON store into the new SQLite default", async () => {
+    const temp = await mkdtemp(join(tmpdir(), "incus-web-agent-runs-migration-"));
+    const sqlitePath = join(temp, "agent-runs.sqlite");
+    const jsonPath = join(temp, "agent-runs.json");
+    const legacy = createAgentRun(command, config(jsonPath));
+    await writeFile(jsonPath, JSON.stringify([legacy]));
+
+    const store = createAgentRunStore(sqlitePath);
+    const migrated = await store.get(legacy.id, legacy.workspaceId, legacy.ownerUserId);
+
+    expect(migrated).toMatchObject({ id: legacy.id, requestId: legacy.requestId });
+    expect(existsSync(`${jsonPath}.legacy-json`)).toBe(true);
+    expect(existsSync(jsonPath)).toBe(false);
+    store.close();
+  });
+
+  it("restores the legacy JSON source when SQLite import fails", async () => {
+    const temp = await mkdtemp(join(tmpdir(), "incus-web-agent-runs-migration-failure-"));
+    const sqlitePath = join(temp, "agent-runs.sqlite");
+    const jsonPath = join(temp, "agent-runs.json");
+    await writeFile(jsonPath, JSON.stringify([{ status: "queued", phase: "queued" }]));
+
+    expect(() => createAgentRunStore(sqlitePath)).toThrow();
+    expect(existsSync(jsonPath)).toBe(true);
+    expect(existsSync(`${jsonPath}.legacy-json`)).toBe(false);
   });
 
   it("records bounded run log entries alongside the latest excerpt", async () => {
@@ -386,17 +492,102 @@ describe("agent run host store", () => {
     await store.appendLog(run.id, "first progress line");
     await store.appendLog(run.id, "second progress line", "success");
 
-    const stored = JSON.parse(await readFile(storePath, "utf8"));
-    expect(stored[0].lastLogExcerpt).toBe("second progress line");
-    expect(stored[0].logs).toMatchObject([
+    const stored = await store.get(run.id, "workspace-1", "user-1");
+    expect(stored?.lastLogExcerpt).toBe("second progress line");
+    expect(stored?.logs).toMatchObject([
       { level: "info", message: "first progress line" },
       { level: "success", message: "second progress line" },
     ]);
+    await expect(store.list("workspace-1", 20)).resolves.toEqual([
+      expect.not.objectContaining({ logs: expect.anything() }),
+    ]);
+  });
+
+  it("replays matching dispatch request ids and rejects changed reuse", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const first = await dispatchAgentRun(command, { store, execute: false, config: config(storePath) });
+    const replay = await dispatchAgentRun(command, { store, execute: false, config: config(storePath) });
+    expect(replay.run.id).toBe(first.run.id);
+    await expect(dispatchAgentRun({
+      ...command,
+      payload: { ...command.payload, task: "different mutation" },
+    }, { store, execute: false, config: config(storePath) })).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("bounds durable admission and reconciles interrupted runs after restart", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const bounded = { ...config(storePath), maxQueuedRuns: 1, maxConcurrentRuns: 1 };
+    const queuedCommand = { ...command, payload: { ...command.payload, agent: "claude" as const } };
+    const first = await dispatchAgentRun(queuedCommand, { store, execute: false, config: bounded });
+    await expect(dispatchAgentRun({ ...queuedCommand, requestId: "queue-overflow" }, {
+      store,
+      execute: false,
+      config: bounded,
+    })).rejects.toMatchObject({ code: "timeout" });
+
+    await store.update(first.run.id, { status: "running", phase: "running" });
+    const reconcileIncusCalls: unknown[] = [];
+    const reconcileCredentialDeletes: unknown[] = [];
+    await reconcileAgentRuns({
+      store,
+      config: bounded,
+      execute: false,
+      incus: async (...args: unknown[]) => {
+        reconcileIncusCalls.push(args);
+        return "";
+      },
+      deleteInjectedCredential: async (...args: unknown[]) => {
+        reconcileCredentialDeletes.push(args);
+      },
+    });
+    const recovered = await store.get(first.run.id, "workspace-1", "user-1");
+    expect(recovered).toMatchObject({ status: "failed", phase: "failed" });
+    expect(recovered?.container.state).toBe("deleted");
+    expect(recovered?.error).toContain("restarted");
+    expect(reconcileCredentialDeletes).toHaveLength(1);
+    expect(reconcileIncusCalls).toContainEqual([[
+      "--project",
+      first.run.container.project,
+      "delete",
+      first.run.container.name,
+      "--force",
+    ]]);
+  });
+
+  it("enforces admission atomically across concurrent dispatches", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath);
+    const bounded = { ...config(storePath), maxQueuedRuns: 1, maxConcurrentRuns: 1 };
+    const queuedCommand = { ...command, payload: { ...command.payload, agent: "claude" as const } };
+    const results = await Promise.allSettled([
+      dispatchAgentRun({ ...queuedCommand, requestId: "atomic-admission-1" }, { store, execute: false, config: bounded }),
+      dispatchAgentRun({ ...queuedCommand, requestId: "atomic-admission-2" }, { store, execute: false, config: bounded }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    await expect(store.list("workspace-1", 10)).resolves.toHaveLength(1);
+  });
+
+  it("prunes terminal history while retaining indexed active runs", async () => {
+    const storePath = await tempStorePath();
+    const store = createAgentRunStore(storePath, { historyLimit: 2 });
+    for (let index = 0; index < 3; index += 1) {
+      const run = createAgentRun({ ...command, requestId: `history-${index}` }, config(storePath));
+      await store.insert(run);
+      await store.update(run.id, { status: "failed", phase: "failed" });
+    }
+    const active = createAgentRun({ ...command, requestId: "history-active" }, config(storePath));
+    await store.insert(active);
+    const runs = await store.list("workspace-1", 100);
+    expect(runs.filter((run) => run.status === "failed")).toHaveLength(2);
+    expect(runs.some((run) => run.id === active.id)).toBe(true);
   });
 });
 
 async function tempStorePath() {
-  return join(await mkdtemp(join(tmpdir(), "incus-web-agent-runs-")), "runs.json");
+  return join(await mkdtemp(join(tmpdir(), "incus-web-agent-runs-")), "runs.sqlite");
 }
 
 function config(storePath: string) {
@@ -494,6 +685,66 @@ async function createFakeCodexAppServer() {
     url: `ws://127.0.0.1:${address.port}`,
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
+}
+
+async function createMalformedCodexAppServer(
+  respond: (socket: { write(data: Buffer | string): void }, headers: Record<string, string>) => void,
+) {
+  const server = createServer((socket) => {
+    let handshake = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      handshake = Buffer.concat([handshake, chunk]);
+      const split = handshake.indexOf("\r\n\r\n");
+      if (split === -1) return;
+      const headers: Record<string, string> = {};
+      for (const line of handshake.subarray(0, split).toString("latin1").split("\r\n").slice(1)) {
+        const index = line.indexOf(":");
+        if (index !== -1) headers[line.slice(0, index).toLowerCase()] = line.slice(index + 1).trim();
+      }
+      socket.removeAllListeners("data");
+      respond(socket, headers);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("missing server address");
+  return {
+    url: `ws://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+function writeServerHandshake(
+  socket: { write(data: Buffer | string): void },
+  headers: Record<string, string>,
+) {
+  const accept = createHash("sha1")
+    .update(`${headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  socket.write(
+    [
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "",
+      "",
+    ].join("\r\n"),
+  );
+}
+
+function encodeServerFrame(opcode: number, final: boolean, payload: Buffer) {
+  const header = Buffer.alloc(payload.length <= 0xffff ? 4 : 10);
+  header[0] = (final ? 0x80 : 0) | opcode;
+  if (payload.length <= 0xffff) {
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header[1] = 127;
+    header.writeUInt32BE(0, 2);
+    header.writeUInt32BE(payload.length, 6);
+  }
+  return Buffer.concat([header, payload]);
 }
 
 function sendServerFrame(socket: { write(data: Buffer): void }, message: unknown) {

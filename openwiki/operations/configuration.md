@@ -12,8 +12,9 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 |----------|---------|-------------|
 | `CONTAINER_NAME` | `incus-web` | Incus container name |
 | `IMAGE` | `images:debian/trixie` | Base image |
+| `CONTAINER_PACKAGES_PREINSTALLED` | `0` | Verify and reuse a trusted prebuilt toolchain instead of installing packages |
 | `RECREATE` | `0` | Force recreation if set to 1 |
-| `WORKSPACE_HOST_PATH` | `/srv/incus-web/default-workspace` | Host workspace directory |
+| `HOST_WORKSPACE` | `$HOME/incus-web-data/$CONTAINER_NAME` | Host workspace directory |
 
 ### Networking
 
@@ -23,6 +24,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 | `INCUS_NETWORK_IPV4` | `198.18.0.1/15` | Bridge subnet |
 | `INCUS_ACL` | `agent-block-lan` | Network ACL name |
 | `ENABLE_NETWORK_ACL` | `1` | Enable RFC1918 blocking |
+| `VALIDATE_INTERNET_EGRESS` | `1` | Require the post-deploy public egress probe; isolated CI may disable only this probe |
 
 ### Access Mode
 
@@ -34,6 +36,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 | `TS_HOSTNAME` | `$CONTAINER_NAME` | Tailnet hostname |
 | `TS_EXTRA_ARGS` | `--accept-routes=false` | Additional Tailscale args |
 | `TAILSCALE_SERVE_PORT` | `443` | HTTPS serve port |
+| `TAILSCALE_VERSION` | `1.98.8` | Checksum-verified Tailscale archive version |
 
 **OIDC:**
 | Variable | Default | Description |
@@ -71,7 +74,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 | `SETUP_ENABLED` | `1` | Enable setup endpoint |
 | `SETUP_PORT` | `3080` | Setup server port |
 | `SETUP_ALLOWED_EMAILS` | `$OIDC_ALLOWED_EMAILS` | Allowed emails for setup |
-| `SETUP_ALLOW_KEY_PERSISTENCE` | `0` | Allow SSH key persistence |
+| `SETUP_ALLOW_KEY_PERSISTENCE` | `0` | Persist the uploaded age identity after setup (explicit opt-in) |
 | `SETUP_COMMAND_TIMEOUT_MS` | `1200000` | Setup command timeout (20 minutes) |
 
 ### Provisioner
@@ -108,7 +111,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 **Agent runs:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INCUS_WEB_AGENT_RUN_STORE_PATH` | `/var/lib/incus-web/agent-runs.json` | Run store path |
+| `INCUS_WEB_AGENT_RUN_STORE_PATH` | `/var/lib/incus-web/agent-runs.sqlite` | Durable SQLite run store path |
 | `INCUS_WEB_AGENT_RUNS_INSTALL_PATH` | `/usr/local/lib/incus-web/agent-runs.mjs` | Install path |
 | `INCUS_WEB_AGENT_GOLDEN_CONTAINER` | `incus-web-agent-golden` | Golden container name |
 | `INCUS_WEB_AGENT_GOLDEN_PROJECT` | `$INCUS_WEB_INCUS_PROJECT` | Golden project |
@@ -130,7 +133,21 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 | `INCUS_WEB_APP_DIR` | `$SCRIPT_DIR/apps/web` | Web app directory |
 | `INCUS_WEB_APP_NPM` | `/usr/bin/npm` | NPM binary |
 | `INCUS_WEB_APP_HOST` | `127.0.0.1` | Listen host |
-| `INCUS_WEB_APP_PORT` | `3001` | Listen port |
+| `INCUS_WEB_APP_PORT` | `3090` | Listen port |
+| `INCUS_WEB_WORKSPACE_STATE_DB` | `/var/lib/incus-web-app/workspace-state.sqlite3` | Durable workspace activity/telemetry database |
+| `INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION` | `0` | Explicitly allow limits/mount/snapshot/import mutations in shared prototype mode |
+
+### Build Worker
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_BUILD_WORKER` | `0` | Install the isolated image-build worker |
+| `INCUS_WEB_BUILD_WORKER_TOKEN` | generated | Service bearer token |
+| `INCUS_WEB_BUILD_WORKER_SOCKET` | `/run/incus-web/build-worker.sock` | Unix socket path |
+| `INCUS_WEB_BUILD_WORKER_STATE_DIR` | `/var/lib/incus-web/build-worker` | SQLite, logs, locks, and work state |
+| `INCUS_WEB_BUILD_WORKER_ALLOWED_ACTORS` | empty | Optional comma-separated actor allowlist |
+| `INCUS_WEB_ALLOW_BUILD_WORKER_ACTIONS` | `0` | Explicit web-app build mutation gate |
+| `INCUS_WEB_BUILD_WORKER_MAX_LOG_BYTES_PER_BUILD` | `20971520` | Per-build retained log cap |
 | `INCUS_WEB_APP_USER` | `incus-web-app` | Service user |
 | `INCUS_WEB_APP_ENV_FILE` | `/etc/incus-web/web.env` | Environment file |
 
@@ -302,9 +319,9 @@ User=incus-web-app
 Group=incus-web
 EnvironmentFile=/etc/incus-web/web.env
 WorkingDirectory=/usr/local/lib/incus-web/app
-ExecStart=/usr/bin/node_modules/.bin/next start
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3090
 Environment="NODE_ENV=production"
-Environment="PORT=3001"
+Environment="PORT=3090"
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
@@ -352,6 +369,6 @@ Uses mock data without real provisioner.
 
 ## Related Documentation
 
-- [Deployment](workflows/deployment.md) - Deployment configuration
-- [Security](operations/security.md) - Security configuration
-- [Testing](operations/testing.md) - Test configuration
+- [Deployment](../workflows/deployment.md) - Deployment configuration
+- [Security](security.md) - Security configuration
+- [Testing](testing.md) - Test configuration

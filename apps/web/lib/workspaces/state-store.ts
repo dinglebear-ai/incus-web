@@ -1,8 +1,7 @@
 import { mkdirSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
-const require = createRequire(import.meta.url);
 const MAX_ACTIVITY_ENTRIES = 100;
 const MAX_TELEMETRY_SAMPLES = 60;
 
@@ -23,16 +22,8 @@ export type WorkspaceTelemetrySample = {
 
 const memoryActivity = new Map<string, WorkspaceActivityEntry[]>();
 const memoryTelemetry = new Map<string, WorkspaceTelemetrySample[]>();
-type SQLiteStatement = {
-  run: (...values: unknown[]) => unknown;
-  all: (...values: unknown[]) => Record<string, unknown>[];
-};
-type SQLiteDatabase = {
-  exec: (sql: string) => unknown;
-  prepare: (sql: string) => SQLiteStatement;
-};
 
-let db: SQLiteDatabase | undefined;
+let db: DatabaseSync | undefined;
 let dbUnavailable = false;
 let dbUnavailableError: unknown;
 
@@ -51,16 +42,13 @@ function stateDbPath() {
   );
 }
 
-function database(): SQLiteDatabase | undefined {
+function database(): DatabaseSync | undefined {
   if (dbUnavailable) {
     if (persistentStateConfigured()) throw workspaceStateError();
     return undefined;
   }
   if (db) return db;
   try {
-    const { DatabaseSync } = require("node:" + "sqlite") as {
-      DatabaseSync: new (path: string) => SQLiteDatabase;
-    };
     const path = stateDbPath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o750 });
     db = new DatabaseSync(path);

@@ -9,6 +9,7 @@ export const PROVISIONER_COMMAND_TYPES = [
   "RunSetup",
   "DispatchAgentRun",
   "ListAgentRuns",
+  "GetAgentRun",
   "SetWorkspaceLimits",
   "SetWorkspaceMount",
   "ClearWorkspaceMount",
@@ -230,8 +231,8 @@ export type WorkspaceSnapshot = {
 
 // The zip itself is staged to disk by the API route (see
 // apps/web/app/api/workspaces/[workspaceId]/golden-config/route.ts) at a
-// path the host provisioner derives from the already-authenticated
-// workspace tuple -- the payload never carries a path, only a content hash,
+// content-addressed path the host provisioner derives from the already-
+// authenticated workspace tuple and hash -- the payload never carries a path,
 // so a caller can't use this command to make the provisioner read an
 // arbitrary host file.
 export type ImportGoldenConfigPayload = {
@@ -308,6 +309,9 @@ export type ListAgentRunsResult = {
   runs: AgentRun[];
 };
 
+export type GetAgentRunPayload = { runId: string };
+export type GetAgentRunResult = { run: AgentRun };
+
 export type SetupValidationPolicy = {
   allowAgeKeyPersistence?: boolean;
 };
@@ -371,6 +375,7 @@ export type ProvisionerCommandPayloadMap = {
   RunSetup: RunSetupPayload;
   DispatchAgentRun: DispatchAgentRunPayload;
   ListAgentRuns: ListAgentRunsPayload;
+  GetAgentRun: GetAgentRunPayload;
   SetWorkspaceLimits: SetWorkspaceLimitsPayload;
   SetWorkspaceMount: SetWorkspaceMountPayload;
   ClearWorkspaceMount: ClearWorkspaceMountPayload;
@@ -388,6 +393,7 @@ export type ProvisionerCommandResultMap = {
   RunSetup: RunSetupResult;
   DispatchAgentRun: DispatchAgentRunResult;
   ListAgentRuns: ListAgentRunsResult;
+  GetAgentRun: GetAgentRunResult;
   SetWorkspaceLimits: SetWorkspaceLimitsResult;
   SetWorkspaceMount: SetWorkspaceMountResult;
   ClearWorkspaceMount: ClearWorkspaceMountResult;
@@ -609,6 +615,18 @@ export function validateListAgentRunsPayload(
     return invalid("limit must be an integer from 1 to 100");
   }
   return { ok: true, value: payload as ListAgentRunsPayload };
+}
+
+export function validateGetAgentRunPayload(
+  payload: unknown,
+): ValidationResult<GetAgentRunPayload> {
+  if (!isRecord(payload) || !hasOnlyKeys(payload, ["runId"])) {
+    return invalid("GetAgentRun payload must contain only runId");
+  }
+  if (typeof payload.runId !== "string" || !/^run_\d{14}_[a-z0-9]+$/.test(payload.runId)) {
+    return invalid("runId is invalid");
+  }
+  return { ok: true, value: payload as GetAgentRunPayload };
 }
 
 export function validateAgentRun(
@@ -877,6 +895,8 @@ function validateCommandPayload(
       return validateDispatchAgentRunPayload(payload);
     case "ListAgentRuns":
       return validateListAgentRunsPayload(payload);
+    case "GetAgentRun":
+      return validateGetAgentRunPayload(payload);
     case "SetWorkspaceLimits":
       return validateSetWorkspaceLimitsPayload(payload);
     case "SetWorkspaceMount":
@@ -1088,6 +1108,8 @@ function validateOperationResult(
       return validateDispatchAgentRunResult(result, workspace);
     case "ListAgentRuns":
       return validateListAgentRunsResult(result, workspace);
+    case "GetAgentRun":
+      return validateGetAgentRunResult(result, workspace);
     case "SetWorkspaceLimits":
     case "SetWorkspaceMount":
     case "ClearWorkspaceMount":
@@ -1206,6 +1228,17 @@ function validateListAgentRunsResult(
     }
   }
   return { ok: true, value: result as ListAgentRunsResult };
+}
+
+function validateGetAgentRunResult(
+  result: unknown,
+  workspace: ProvisionerWorkspaceRef,
+): ValidationResult<GetAgentRunResult> {
+  if (!isRecord(result) || !hasOnlyKeys(result, ["run"])) {
+    return invalid("GetAgentRun result must include a run");
+  }
+  const run = validateAgentRun(result.run, workspace);
+  return run.ok ? { ok: true, value: { run: run.value } } : run;
 }
 
 function validateCreateWorkspaceResult(

@@ -364,20 +364,11 @@ incus exec incus-web -- journalctl -f
 
 ### Metrics
 
-Planned metrics:
-- Workspace creation rate
-- Agent run success rate
-- Average command duration
-- Container resource usage
-- Failed authentication attempts
+`GET /metrics` exports process uptime and control-plane, state-store, and provisioner readiness gauges. Runtime command, authentication, restart, and queue events remain available through the systemd journals for aggregation.
 
 ### Alerts
 
-Planned alerts:
-- Provisioner token validation failures
-- Container exit loops
-- Resource limit breaches
-- Authentication rate spikes
+Alert on sustained readiness failure, provisioner authentication failures, service restart loops, and build-queue growth. See [Monitoring and Alerts](monitoring.md) for thresholds and response steps.
 
 ## Hardening Checklist
 
@@ -455,7 +446,7 @@ Determined attacker could:
 
 ## Related Documentation
 
-- [Provisioner Contract](domain/provisioner-contract.md) - Security boundary
-- [Multi-Tenant Control Plane](domain/multi-tenant-control-plane.md) - Authorization
-- [Configuration](operations/configuration.md) - Security settings
-- [Deployment](workflows/deployment.md) - Hardening steps
+- [Provisioner Contract](../domain/provisioner-contract.md) - Security boundary
+- [Multi-Tenant Control Plane](../domain/multi-tenant-control-plane.md) - Authorization
+- [Configuration](configuration.md) - Security settings
+- [Deployment](../workflows/deployment.md) - Hardening steps

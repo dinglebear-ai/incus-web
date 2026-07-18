@@ -23,3 +23,4 @@ describe("healthz route", () => {
     expect(response.status).toBe(204);
   });
 });
+// @vitest-environment node

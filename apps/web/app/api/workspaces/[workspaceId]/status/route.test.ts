@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GET } from "./route";
+import { GET, resetWorkspaceStatusCacheForTests } from "./route";
 
 const workspace = {
   id: "workspace-incus-web",
@@ -11,6 +11,7 @@ const workspace = {
 
 const sendWorkspaceCommand = vi.fn();
 const getWorkspaceRefForActor = vi.fn();
+const appendTelemetry = vi.fn();
 const headersMock = vi.fn(
   async () => new Headers({ "x-auth-request-email": "test@example.com" }),
 );
@@ -24,10 +25,19 @@ vi.mock("@/lib/workspaces/provisioner", () => ({
   sendWorkspaceCommand: (...args: unknown[]) => sendWorkspaceCommand(...args),
 }));
 
+vi.mock("@/lib/workspaces/state-store", () => ({
+  appendTelemetry: (...args: unknown[]) => appendTelemetry(...args),
+}));
+
 describe("workspace status route", () => {
   beforeEach(() => {
+    resetWorkspaceStatusCacheForTests();
     getWorkspaceRefForActor.mockReturnValue({ ok: true, workspace });
     sendWorkspaceCommand.mockReset();
+    appendTelemetry.mockReset();
+    appendTelemetry.mockReturnValue([
+      { at: "2026-07-08T00:00:00.000Z", cpuPercent: 5, memoryPercent: 50 },
+    ]);
     headersMock.mockResolvedValue(
       new Headers({ "x-auth-request-email": "test@example.com" }),
     );
@@ -109,7 +119,9 @@ describe("workspace status route", () => {
     await expect(response.json()).resolves.toMatchObject({ ok: false });
   });
 
-  it("coalesces concurrent requests for the same workspace into one provisioner call", async () => {
+  it("shares one status and telemetry sample across concurrent and staggered viewers", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     let resolveOperation!: (value: unknown) => void;
     sendWorkspaceCommand.mockReturnValue(
       new Promise((resolve) => {
@@ -147,11 +159,23 @@ describe("workspace status route", () => {
     const [firstResponse, secondResponse] = await Promise.all([first, second]);
 
     expect(sendWorkspaceCommand).toHaveBeenCalledTimes(1);
+    expect(appendTelemetry).toHaveBeenCalledTimes(1);
     expect(firstResponse.status).toBe(200);
     expect(secondResponse.status).toBe(200);
 
-    // A subsequent request after the in-flight one settles must issue a
-    // fresh provisioner call rather than reusing the stale result.
+    const staggered = await GET(new Request("http://localhost/api"), {
+      params: Promise.resolve({ workspaceId: workspace.id }),
+    });
+    expect(staggered.status).toBe(200);
+    expect(sendWorkspaceCommand).toHaveBeenCalledTimes(1);
+    expect(appendTelemetry).toHaveBeenCalledTimes(1);
+    await expect(staggered.json()).resolves.toMatchObject({
+      history: [{ cpuPercent: 5, memoryPercent: 50 }],
+    });
+
+    // Once the bounded sampling interval expires, refresh the provisioner
+    // result and telemetry rather than serving stale data indefinitely.
+    now += 5_001;
     sendWorkspaceCommand.mockResolvedValue({
       id: "op-2",
       requestId: "req-test-2",

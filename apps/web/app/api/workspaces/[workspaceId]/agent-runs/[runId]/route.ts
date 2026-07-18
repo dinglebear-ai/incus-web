@@ -8,7 +8,7 @@ import {
   getWorkspaceRefForActor,
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
-import { validateListAgentRunsPayload } from "@/lib/provisioner/contracts";
+import { validateGetAgentRunPayload } from "@/lib/provisioner/contracts";
 import {
   jsonError,
   provisionerError,
@@ -26,24 +26,27 @@ export async function GET(_request: Request, context: RouteContext) {
   const prepared = await prepareRequest(context);
   if (!prepared.ok) return prepared.response;
 
-  const payload = validateListAgentRunsPayload({ limit: 100 });
+  const payload = validateGetAgentRunPayload({ runId: prepared.runId });
   if (!payload.ok) {
     return provisionerError(payload.error);
   }
 
   const operation = await sendWorkspaceCommand(
     prepared.actor,
-    "ListAgentRuns",
+    "GetAgentRun",
     payload.value,
   );
   if (operation.status !== "succeeded") {
+    if (operation.error?.code === "invalid_state") {
+      return jsonError("agent_run_not_found", "agent run was not found", 404);
+    }
     return Response.json(
       { ok: false, operation },
       { status: statusForProvisionerError(operation.error) },
     );
   }
 
-  const run = operation.result?.runs.find((candidate) => candidate.id === prepared.runId);
+  const run = operation.result?.run;
   if (!run) {
     return jsonError("agent_run_not_found", "agent run was not found", 404);
   }

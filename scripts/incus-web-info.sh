@@ -23,7 +23,6 @@ title="${identity_label:-${INCUS_WEB_WORKSPACE_LABEL:-incus-web}}"
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   accent=$'\033[38;2;41;182;246m'
   muted=$'\033[38;2;167;188;201m'
-  primary=$'\033[38;2;230;244;251m'
   value=$'\033[38;2;125;211;199m'
   warn=$'\033[38;2;198;163;107m'
   error=$'\033[38;2;199;132;144m'
@@ -32,7 +31,6 @@ if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
 else
   accent=""
   muted=""
-  primary=""
   value=""
   warn=""
   error=""

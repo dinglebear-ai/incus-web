@@ -145,6 +145,33 @@ type ResourceProfileId = "local-dev"  // Resource profile (currently only local-
 
 ## Commands
 
+The wire format is a strict nested envelope; `apps/web/lib/provisioner/contracts.ts` is the executable source of truth:
+
+```typescript
+type ProvisionerCommand<TType extends ProvisionerCommandType> = {
+  version: "provisioner.v1"
+  requestId: string
+  type: TType
+  actor: {
+    userId: string
+    oidcSubject: string
+    email: string
+    displayName: string
+  }
+  workspace: {
+    id: string
+    ownerUserId: string
+    incusProject: string
+    incusContainer: string
+  }
+  payload: ProvisionerCommandPayloadMap[TType]
+}
+```
+
+The complete command set is: `CreateWorkspace`, `StartWorkspace`, `StopWorkspace`, `RestartWorkspace`, `GetWorkspaceStatus`, `RunSetup`, `DispatchAgentRun`, `ListAgentRuns`, `GetAgentRun`, `SetWorkspaceLimits`, `SetWorkspaceMount`, `ClearWorkspaceMount`, `CreateWorkspaceSnapshot`, `ListWorkspaceSnapshots`, and `ImportGoldenConfig`.
+
+> The field lists in the command subsections below describe payload/result concepts. They are not flattened wire objects: every request uses the envelope above, command-specific values live under `payload`, repository input is `repoUrl`, and the optional revision is `ref`.
+
 ### CreateWorkspace
 
 Creates new workspace container.
@@ -716,7 +743,7 @@ async function withIncusCommand(fn) {
 
 ## Related Documentation
 
-- [Multi-Tenant Control Plane](domain/multi-tenant-control-plane.md) - Actors and permissions
-- [Architecture](architecture.md) - Provisioner architecture
-- [Deployment](workflows/deployment.md) - Provisioner installation
+- [Multi-Tenant Control Plane](multi-tenant-control-plane.md) - Actors and permissions
+- [Architecture](../architecture.md) - Provisioner architecture
+- [Deployment](../workflows/deployment.md) - Provisioner installation
 - [Contract Specification](../../docs/contracts/provisioner-boundary-v1.md) - Full contract spec

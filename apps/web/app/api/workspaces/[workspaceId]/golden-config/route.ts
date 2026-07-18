@@ -9,9 +9,9 @@ import {
   sendWorkspaceCommand,
 } from "@/lib/workspaces/provisioner";
 import {
+  GoldenConfigUploadError,
   goldenConfigMaxBytesFromEnv,
-  looksLikeZip,
-  stageGoldenConfigUpload,
+  stageGoldenConfigStream,
 } from "@/lib/workspaces/golden-config";
 import {
   jsonError,
@@ -75,36 +75,32 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  let content: Buffer;
+  let sha256Hex: string;
   try {
-    content = await readLimitedBody(request, maxBytes);
+    ({ sha256Hex } = await stageGoldenConfigStream(
+      access.workspace.id,
+      request.body,
+      maxBytes,
+    ));
   } catch (error) {
-    if (error instanceof BodyTooLargeError) {
+    const uploadCode = error instanceof GoldenConfigUploadError
+      ? error.code
+      : typeof error === "object" && error !== null && "code" in error
+        ? String(error.code)
+        : undefined;
+    if (uploadCode === "busy") {
+      return jsonError("upload_busy", "too many golden config uploads are active", 429);
+    }
+    if (uploadCode === "too_large") {
       return jsonError(
         "payload_too_large",
         `golden config upload exceeds the ${maxBytes}-byte limit`,
         413,
       );
     }
-    return jsonError(
-      "invalid_body",
-      error instanceof Error ? error.message : "failed to read request body",
-      400,
-    );
+    const status = uploadCode === "empty" || uploadCode === "invalid_zip" ? 400 : 500;
+    return jsonError("invalid_body", error instanceof Error ? error.message : "failed to stage request body", status);
   }
-
-  if (content.length === 0) {
-    return jsonError("invalid_body", "golden config upload was empty", 400);
-  }
-  if (!looksLikeZip(content)) {
-    return jsonError(
-      "invalid_body",
-      "golden config upload does not look like a zip file",
-      400,
-    );
-  }
-
-  const { sha256Hex } = await stageGoldenConfigUpload(access.workspace.id, content);
 
   const operation = await sendWorkspaceCommand(actor, "ImportGoldenConfig", {
     sha256Hex,
@@ -118,27 +114,4 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   return Response.json({ ok: true, operation });
-}
-
-class BodyTooLargeError extends Error {}
-
-async function readLimitedBody(request: Request, maxBytes: number): Promise<Buffer> {
-  if (!request.body) {
-    return Buffer.alloc(0);
-  }
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new BodyTooLargeError("request body exceeded the configured limit");
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
 }

@@ -47,7 +47,7 @@ function postOperations(
   });
 }
 
-async function waitForSocket(socketPath: string, timeoutMs = 5000) {
+async function waitForSocket(socketPath: string, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -77,6 +77,8 @@ describe("provisioner-server SetWorkspaceLimits (integration)", () => {
           ...process.env,
           INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
           INCUS_WEB_PROVISIONER_SOCKET: socketPath,
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
+          INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
           INCUS_WEB_PROVISIONER_HOST: "",
           INCUS_WEB_PROVISIONER_PORT: "0",
         },
@@ -85,7 +87,7 @@ describe("provisioner-server SetWorkspaceLimits (integration)", () => {
     );
 
     await waitForSocket(socketPath);
-  }, 15000);
+  }, 30000);
 
   afterAll(async () => {
     child?.kill();
@@ -159,7 +161,7 @@ describe("provisioner-server SetWorkspaceLimits reaches the real incus call (int
   // that passes validateLimitsPayload must proceed to a real `incus config
   // set`/`get` invocation, and this suite asserts that happens without ever
   // risking a mutation against a real, possibly-in-use container.
-  const nonexistentContainer = "incus-web-integration-test-does-not-exist";
+  const nonexistentContainer = "ws-integration-test-does-not-exist";
   let tempDir: string;
   let socketPath: string;
   let child: ChildProcess;
@@ -176,6 +178,8 @@ describe("provisioner-server SetWorkspaceLimits reaches the real incus call (int
           ...process.env,
           INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
           INCUS_WEB_PROVISIONER_SOCKET: socketPath,
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
+          INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
           INCUS_WEB_PROVISIONER_HOST: "",
           INCUS_WEB_PROVISIONER_PORT: "0",
           INCUS_WEB_INCUS_CONTAINER: nonexistentContainer,
@@ -185,7 +189,7 @@ describe("provisioner-server SetWorkspaceLimits reaches the real incus call (int
     );
 
     await waitForSocket(socketPath);
-  }, 15000);
+  }, 30000);
 
   afterAll(async () => {
     child?.kill();

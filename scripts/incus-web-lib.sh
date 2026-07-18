@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2086 # controlled outer-shell interpolation into the container provisioning program
 set -euo pipefail
 
 INCUS_WEB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -325,7 +326,7 @@ validate_container_signals() {
 
   log "validating container signal delivery"
   # This script is evaluated inside the container; keep expansions there.
-  # shellcheck disable=SC2016
+  # shellcheck disable=SC2016,SC2086
   container_bash "$name" 'set -euo pipefail
 kill -0 $$
 sleep 300 &
@@ -531,6 +532,24 @@ push_ghostty_aurora_patch() {
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 }
 
+push_container_provision_program() {
+  local name="$1"
+  local source_file="$INCUS_WEB_CONTAINER_PROVISION_PROGRAM"
+  local tmp_file=""
+
+  if [[ ! -f "$source_file" ]]; then
+    tmp_file="$(mktemp)"
+    [[ "$INCUS_WEB_CONTAINER_PROVISION_PROGRAM_URL" == https://* ]] || die "INCUS_WEB_CONTAINER_PROVISION_PROGRAM_URL must use https://"
+    curl --proto '=https' --tlsv1.2 -fsSL "$INCUS_WEB_CONTAINER_PROVISION_PROGRAM_URL" -o "$tmp_file"
+    source_file="$tmp_file"
+  fi
+
+  incus_cmd exec "$name" -- install -d -m 755 /usr/local/lib/incus-web
+  incus_cmd file push "$source_file" "$name/usr/local/lib/incus-web/container-provision.sh"
+  incus_cmd exec "$name" -- chmod 755 /usr/local/lib/incus-web/container-provision.sh
+  [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
+}
+
 ensure_host_node() {
   if [[ -x "$INCUS_WEB_PROVISIONER_NODE" ]]; then
     if [[ -x "${INCUS_WEB_APP_NPM:-/usr/bin/npm}" || "$ENABLE_HOST_WEB_APP" != "1" ]]; then
@@ -592,6 +611,8 @@ install_host_provisioner_server() {
   local source_file="$INCUS_WEB_PROVISIONER_SERVER"
   local tmp_file=""
   local install_dir
+  local release_dir
+  local current_link
 
   if [[ ! -f "$source_file" ]]; then
     [[ "$ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD" == "1" ]] || die "host provisioner server is missing locally; set ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1 to fetch it from INCUS_WEB_PROVISIONER_SERVER_URL"
@@ -602,12 +623,25 @@ install_host_provisioner_server() {
   fi
 
   install_dir="$(dirname "$INCUS_WEB_PROVISIONER_INSTALL_PATH")"
-  sudo_cmd install -d -m 755 "$install_dir"
-  sudo_cmd install -m 755 "$source_file" "$INCUS_WEB_PROVISIONER_INSTALL_PATH"
+  release_dir="$install_dir/releases/$(date +%Y%m%d%H%M%S)-$$"
+  current_link="$install_dir/current"
+  INCUS_WEB_PROVISIONER_PREVIOUS_RELEASE="$(readlink -f "$current_link" 2>/dev/null || true)"
+  sudo_cmd install -d -m 755 "$release_dir"
+  sudo_cmd install -m 755 "$source_file" "$release_dir/provisioner-server.mjs"
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
 
+  INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH="$release_dir/agent-runs.mjs"
+  INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH="$release_dir/service-auth.mjs"
   install_host_provisioner_agent_runs_module
   install_host_provisioner_service_auth_module
+  sudo_cmd "$INCUS_WEB_PROVISIONER_NODE" --check "$release_dir/provisioner-server.mjs"
+  sudo_cmd "$INCUS_WEB_PROVISIONER_NODE" --check "$release_dir/agent-runs.mjs"
+  sudo_cmd "$INCUS_WEB_PROVISIONER_NODE" --check "$release_dir/service-auth.mjs"
+  sudo_cmd ln -sfn "$release_dir" "$current_link.new"
+  sudo_cmd mv -Tf "$current_link.new" "$current_link"
+  INCUS_WEB_PROVISIONER_INSTALL_PATH="$current_link/provisioner-server.mjs"
+  INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH="$current_link/agent-runs.mjs"
+  INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH="$current_link/service-auth.mjs"
 }
 
 # provisioner-server.mjs imports this module by relative path
@@ -641,6 +675,8 @@ install_build_worker_server() {
   local source_file="$INCUS_WEB_BUILD_WORKER_SERVER"
   local tmp_file=""
   local install_dir
+  local release_dir
+  local current_link
 
   if [[ ! -f "$source_file" ]]; then
     [[ "$ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD" == "1" ]] || die "build worker server is missing locally; set ENABLE_HOST_PROVISIONER_REMOTE_DOWNLOAD=1 to fetch it from INCUS_WEB_BUILD_WORKER_SERVER_URL"
@@ -651,10 +687,19 @@ install_build_worker_server() {
   fi
 
   install_dir="$(dirname "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH")"
-  sudo_cmd install -d -m 755 "$install_dir"
-  sudo_cmd install -m 755 "$source_file" "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH"
+  release_dir="$install_dir/releases/$(date +%Y%m%d%H%M%S)-$$"
+  current_link="$install_dir/current-build-worker"
+  INCUS_WEB_BUILD_WORKER_PREVIOUS_RELEASE="$(readlink -f "$current_link" 2>/dev/null || true)"
+  sudo_cmd install -d -m 755 "$release_dir"
+  sudo_cmd install -m 755 "$source_file" "$release_dir/build-worker.mjs"
   [[ -z "$tmp_file" ]] || rm -f "$tmp_file"
+  INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH="$release_dir/service-auth.mjs"
   install_host_provisioner_service_auth_module
+  sudo_cmd "$INCUS_WEB_PROVISIONER_NODE" --check "$release_dir/build-worker.mjs"
+  sudo_cmd "$INCUS_WEB_PROVISIONER_NODE" --check "$release_dir/service-auth.mjs"
+  sudo_cmd ln -sfn "$release_dir" "$current_link.new"
+  sudo_cmd mv -Tf "$current_link.new" "$current_link"
+  INCUS_WEB_BUILD_WORKER_INSTALL_PATH="$current_link/build-worker.mjs"
 }
 
 install_host_provisioner_agent_runs_module() {
@@ -1068,7 +1113,15 @@ EOF
   sudo_cmd systemctl daemon-reload
   sudo_cmd systemctl enable incus-web-provisioner
   sudo_cmd systemctl restart incus-web-provisioner
-  wait_for_host_provisioner
+  if ! wait_for_host_provisioner; then
+    if [[ -n "${INCUS_WEB_PROVISIONER_PREVIOUS_RELEASE:-}" ]]; then
+      log "provisioner readiness failed; restoring ${INCUS_WEB_PROVISIONER_PREVIOUS_RELEASE}"
+      sudo_cmd ln -sfn "$INCUS_WEB_PROVISIONER_PREVIOUS_RELEASE" "$(dirname "$INCUS_WEB_PROVISIONER_INSTALL_PATH")/../current.rollback"
+      sudo_cmd mv -Tf "$(dirname "$INCUS_WEB_PROVISIONER_INSTALL_PATH")/../current.rollback" "$(dirname "$INCUS_WEB_PROVISIONER_INSTALL_PATH")/../current"
+      sudo_cmd systemctl restart incus-web-provisioner
+    fi
+    die "host provisioner did not become healthy"
+  fi
   log "host provisioner: incus-web-provisioner via $INCUS_WEB_PROVISIONER_SOCKET"
 }
 
@@ -1098,7 +1151,7 @@ host_web_app_source_stamp() {
   (
     cd "$INCUS_WEB_APP_DIR"
     {
-      for path in package.json package-lock.json next.config.ts next.config.mjs tsconfig.json postcss.config.mjs components.json app components lib public; do
+      for path in package.json package-lock.json next.config.ts next.config.mjs tsconfig.json postcss.config.mjs components.json app components lib public types; do
         [[ -e "$path" ]] || continue
         if [[ -d "$path" ]]; then
           find "$path" -type f -print0 | sort -z | xargs -0 -r sha256sum
@@ -1153,6 +1206,8 @@ write_host_web_app_env() {
   validate_port_value INCUS_WEB_APP_PORT "$INCUS_WEB_APP_PORT"
   validate_systemd_env_value INCUS_WEB_WORKSPACE_OWNER_MODE "$INCUS_WEB_WORKSPACE_OWNER_MODE"
   validate_systemd_env_value INCUS_WEB_ALLOW_SHARED_PROTOTYPE "$INCUS_WEB_ALLOW_SHARED_PROTOTYPE"
+  validate_systemd_env_value INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION "$INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION"
+  validate_systemd_env_value INCUS_WEB_PROVISIONER_TIMEOUT_MS "$INCUS_WEB_PROVISIONER_TIMEOUT_MS"
   validate_systemd_env_value INCUS_WEB_GOLDEN_CONFIG_DIR "$INCUS_WEB_GOLDEN_CONFIG_DIR"
   validate_env_file_value INCUS_WEB_WORKSPACE_STATE_DB "$INCUS_WEB_WORKSPACE_STATE_DB"
   if [[ "${ENABLE_BUILD_WORKER:-0}" == "1" ]]; then
@@ -1180,6 +1235,8 @@ write_host_web_app_env() {
     printf 'INCUS_WEB_APP_PORT=%s\n' "$INCUS_WEB_APP_PORT"
     printf 'INCUS_WEB_WORKSPACE_OWNER_MODE=%s\n' "$INCUS_WEB_WORKSPACE_OWNER_MODE"
     printf 'INCUS_WEB_ALLOW_SHARED_PROTOTYPE=%s\n' "$INCUS_WEB_ALLOW_SHARED_PROTOTYPE"
+    printf 'INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION=%s\n' "$INCUS_WEB_ALLOW_SHARED_CONFIG_MUTATION"
+    printf 'INCUS_WEB_PROVISIONER_TIMEOUT_MS=%s\n' "$INCUS_WEB_PROVISIONER_TIMEOUT_MS"
     printf 'INCUS_WEB_GOLDEN_CONFIG_DIR=%s\n' "$INCUS_WEB_GOLDEN_CONFIG_DIR"
     printf 'INCUS_WEB_WORKSPACE_STATE_DB=%s\n' "$INCUS_WEB_WORKSPACE_STATE_DB"
     if [[ "${ENABLE_BUILD_WORKER:-0}" == "1" ]]; then
@@ -1255,7 +1312,7 @@ wait_for_build_worker() {
   done
 
   sudo_cmd journalctl -u incus-web-build-worker -n 80 --no-pager >&2 || true
-  die "build worker did not become healthy"
+  return 1
 }
 
 configure_build_worker() {
@@ -1315,7 +1372,15 @@ EOF
   sudo_cmd systemctl daemon-reload
   sudo_cmd systemctl enable incus-web-build-worker
   sudo_cmd systemctl restart incus-web-build-worker
-  wait_for_build_worker
+  if ! wait_for_build_worker; then
+    if [[ -n "${INCUS_WEB_BUILD_WORKER_PREVIOUS_RELEASE:-}" ]]; then
+      log "build worker readiness failed; restoring ${INCUS_WEB_BUILD_WORKER_PREVIOUS_RELEASE}"
+      sudo_cmd ln -sfn "$INCUS_WEB_BUILD_WORKER_PREVIOUS_RELEASE" "$(dirname "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH")/../current-build-worker.rollback"
+      sudo_cmd mv -Tf "$(dirname "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH")/../current-build-worker.rollback" "$(dirname "$INCUS_WEB_BUILD_WORKER_INSTALL_PATH")/../current-build-worker"
+      sudo_cmd systemctl restart incus-web-build-worker
+    fi
+    die "build worker did not become healthy"
+  fi
   log "build worker: incus-web-build-worker via $INCUS_WEB_BUILD_WORKER_SOCKET"
 }
 
@@ -1339,14 +1404,14 @@ wait_for_host_provisioner() {
   done
 
   sudo_cmd journalctl -u incus-web-provisioner -n 80 --no-pager >&2 || true
-  die "host provisioner did not become healthy"
+  return 1
 }
 
 wait_for_host_web_app() {
-  local url="http://$INCUS_WEB_APP_HOST:$INCUS_WEB_APP_PORT/healthz"
+  local url="http://$INCUS_WEB_APP_HOST:$INCUS_WEB_APP_PORT/readyz"
   local curl_args=(-fsS --max-time 2)
 
-  wait_for_host_provisioner
+  wait_for_host_provisioner || die "host provisioner did not become healthy"
   if [[ -n "${INCUS_WEB_TRUSTED_PROXY_SECRET:-}" ]]; then
     curl_args+=(-H "X-Incus-Web-Proxy-Secret: $INCUS_WEB_TRUSTED_PROXY_SECRET")
   fi
@@ -1419,7 +1484,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
 ProtectSystem=full
-ReadWritePaths=/opt/incus-web-app/.next/cache
+ReadWritePaths=/opt/incus-web-app/.next/cache $INCUS_WEB_GOLDEN_CONFIG_DIR
 RestrictSUIDSGID=true
 LockPersonality=true
 
@@ -1456,9 +1521,22 @@ provision_container() {
   fi
 
   log "installing container packages"
-  # This script is evaluated inside the container; keep expansions there.
-  # shellcheck disable=SC2016
-  container_bash "$name" 'export DEBIAN_FRONTEND=noninteractive
+  if [[ "$CONTAINER_PACKAGES_PREINSTALLED" == "1" ]]; then
+    log "verifying preinstalled container packages"
+    # This script is evaluated inside the container; keep expansions there.
+    # shellcheck disable=SC2016
+    container_bash "$name" 'set -euo pipefail
+for command in cc cargo curl git go gpg jq nc node npm pipx pkg-config python3 rustc sudo unzip zip zsh gh claude wetty; do
+  command -v "$command" >/dev/null || {
+    printf "required preinstalled command is missing: %s\n" "$command" >&2
+    exit 1
+  }
+done'
+  else
+    # This script is evaluated inside the container; keep expansions there.
+    # shellcheck disable=SC2016,SC2086
+    container_bash "$name" 'set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
   build-essential \
@@ -1494,14 +1572,15 @@ if ! command -v gh >/dev/null 2>&1; then
   apt-get install -y gh
 fi
 if ! command -v claude >/dev/null 2>&1; then
-  npm install -g @anthropic-ai/claude-code
+  npm install -g @anthropic-ai/claude-code@'"$CLAUDE_CODE_VERSION"'
 fi
 if ! command -v wetty >/dev/null 2>&1; then
-  npm install -g wetty
+  npm install -g wetty@'"$WETTY_VERSION"'
 fi
 if [[ "'"$TERMINAL_BACKEND"'" == "ghostty-web" ]] && ! npm list -g "@ghostty-web/demo@'"$GHOSTTY_WEB_DEMO_VERSION"'" >/dev/null 2>&1; then
   npm install -g @ghostty-web/demo@'"$GHOSTTY_WEB_DEMO_VERSION"'
 fi'
+  fi
 
   log "configuring user, workspace, developer tools, tailscaled, and wetty"
   push_bootstrap_server "$name"
@@ -1513,224 +1592,22 @@ fi'
     log "applying Aurora chrome to ghostty-web demo"
     container_bash "$name" "/usr/local/bin/incus-web-ghostty-aurora-patch"
   fi
-  # The following string is executed inside the container and intentionally
-  # contains nested here-docs and shell snippets for files it generates.
-  # shellcheck disable=SC1078,SC1079,SC1083,SC2027,SC2068,SC2140,SC2145
-  container_bash "$name" "set -euo pipefail
-if ! id -u '$WEB_USER' >/dev/null 2>&1; then
-  useradd -m -s /usr/bin/zsh '$WEB_USER'
-fi
-usermod -s /usr/bin/zsh '$WEB_USER'
-install -d -o '$WEB_USER' -g '$WEB_USER' '$CONTAINER_WORKSPACE'
-usermod -aG sudo '$WEB_USER'
-printf '%s ALL=(ALL) NOPASSWD:ALL\n' '$WEB_USER' >/etc/sudoers.d/incus-web-user
-chmod 440 /etc/sudoers.d/incus-web-user
-install -d -o '$WEB_USER' -g '$WEB_USER' /home/'$WEB_USER'/.local/bin /home/'$WEB_USER'/.cargo
-if [[ ! -e /home/'$WEB_USER'/.local/bin/env ]]; then
-  cat >/home/'$WEB_USER'/.local/bin/env <<'EOF'
-if (return 0 2>/dev/null); then
-  return 0
-fi
-exec /usr/bin/env "$@"
-EOF
-  chown '$WEB_USER':'$WEB_USER' /home/'$WEB_USER'/.local/bin/env
-  chmod 755 /home/'$WEB_USER'/.local/bin/env
-fi
-if [[ ! -e /home/'$WEB_USER'/.cargo/env ]]; then
-  cat >/home/'$WEB_USER'/.cargo/env <<'EOF'
-if (return 0 2>/dev/null); then
-  return 0
-fi
-exit 0
-EOF
-  chown '$WEB_USER':'$WEB_USER' /home/'$WEB_USER'/.cargo/env
-  chmod 644 /home/'$WEB_USER'/.cargo/env
-fi
-chmod 755 /usr/local/bin/incus-web-open
-ln -sf /usr/local/bin/incus-web-open /usr/local/bin/xdg-open
-ln -sf /usr/local/bin/incus-web-open /usr/local/bin/sensible-browser
-ln -sf /usr/local/bin/incus-web-open /usr/local/bin/www-browser
-cat >/etc/profile.d/incus-web-browser.sh <<EOF
-export BROWSER=/usr/local/bin/incus-web-open
-export INCUS_WEB_WORKSPACE_LABEL='$INCUS_WEB_WORKSPACE_LABEL'
-EOF
-printf '%s\n' \
-  '#!/usr/bin/env bash' \
-  'set -euo pipefail' \
-  '' \
-  'export HOME=/home/$WEB_USER' \
-  'export USER=$WEB_USER' \
-  'export LOGNAME=$WEB_USER' \
-  'export BROWSER=/usr/local/bin/incus-web-open' \
-  'export INCUS_WEB_WORKSPACE_LABEL=\"${INCUS_WEB_WORKSPACE_LABEL:-}\"' \
-  'export PATH=\"/usr/local/bin:/usr/bin:/bin:\$HOME/.local/bin:\$PATH\"' \
-  '' \
-  'cd $CONTAINER_WORKSPACE 2>/dev/null || cd \"\$HOME\"' \
-  'exec \"\$@\"' \
-  >/usr/local/bin/agent-env
-chmod 755 /usr/local/bin/agent-env
-if ! grep -q '/usr/local/bin' /home/'$WEB_USER'/.bashrc 2>/dev/null; then
-  cat >>/home/'$WEB_USER'/.bashrc <<'EOF'
-
-export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"
-export BROWSER=/usr/local/bin/incus-web-open
-cd '$CONTAINER_WORKSPACE' 2>/dev/null || true
-EOF
-fi
-if ! grep -q 'incus-web-info' /home/'$WEB_USER'/.bashrc 2>/dev/null; then
-  cat >>/home/'$WEB_USER'/.bashrc <<'EOF'
-
-if [ -t 1 ]; then
-  export INCUS_WEB_INFO_SHOWN=1
-  /usr/local/bin/incus-web-info 2>/dev/null || true
-fi
-EOF
-fi
-chown '$WEB_USER':'$WEB_USER' /home/'$WEB_USER'/.bashrc
-if ! grep -q '/usr/local/bin' /home/'$WEB_USER'/.zshrc 2>/dev/null; then
-  cat >>/home/'$WEB_USER'/.zshrc <<'EOF'
-
-export PATH=\"\$HOME/.local/bin:/usr/local/bin:\$PATH\"
-export BROWSER=/usr/local/bin/incus-web-open
-cd '$CONTAINER_WORKSPACE' 2>/dev/null || true
-EOF
-fi
-if ! grep -q 'incus-web-info' /home/'$WEB_USER'/.zshrc 2>/dev/null; then
-  cat >>/home/'$WEB_USER'/.zshrc <<'EOF'
-
-if [[ -o interactive ]]; then
-  export INCUS_WEB_INFO_SHOWN=1
-  /usr/local/bin/incus-web-info 2>/dev/null || true
-fi
-EOF
-fi
-chown '$WEB_USER':'$WEB_USER' /home/'$WEB_USER'/.zshrc
-incus_web_zlogin_line=\"\$(grep -n '/usr/local/bin/incus-web-info' /etc/zsh/zlogin 2>/dev/null | head -n 1 | cut -d: -f1 || true)\"
-if [[ -n \"\$incus_web_zlogin_line\" ]]; then
-  keep_lines=\$((incus_web_zlogin_line - 3))
-  tmp_zlogin=\"\$(mktemp)\"
-  head -n \"\$keep_lines\" /etc/zsh/zlogin >\"\$tmp_zlogin\"
-  cat \"\$tmp_zlogin\" >/etc/zsh/zlogin
-  rm -f \"\$tmp_zlogin\"
-fi
-incus_web_info_line=\"\$(grep -n '^incus_web_info_precmd()' /etc/zsh/zshrc 2>/dev/null | head -n 1 | cut -d: -f1 || true)\"
-if [[ -n \"\$incus_web_info_line\" ]]; then
-  keep_lines=\$((incus_web_info_line - 3))
-  tmp_zshrc=\"\$(mktemp)\"
-  head -n \"\$keep_lines\" /etc/zsh/zshrc >\"\$tmp_zshrc\"
-  cat \"\$tmp_zshrc\" >/etc/zsh/zshrc
-  rm -f \"\$tmp_zshrc\"
-fi
-if ! grep -q 'incus_web_info_precmd' /etc/zsh/zshrc 2>/dev/null; then
-  cat >>/etc/zsh/zshrc <<'EOF'
-
-export BROWSER=/usr/local/bin/incus-web-open
-autoload -Uz add-zsh-hook 2>/dev/null || true
-incus_web_info_precmd() {
-  if [[ "\${INCUS_WEB_INFO_SHOWN:-0}" != "1" && -t 1 ]]; then
-    /usr/local/bin/incus-web-info 2>/dev/null || true
-    export INCUS_WEB_INFO_SHOWN=1
-  fi
-}
-if (( $+functions[add-zsh-hook] )); then
-  add-zsh-hook precmd incus_web_info_precmd
-else
-  incus_web_info_precmd
-fi
-EOF
-fi
-if ! runuser -u '$WEB_USER' -- bash -lc 'command -v codex >/dev/null 2>&1'; then
-  npm install -g @openai/codex
-fi
-install -d -m 755 /etc/default
-cat >/etc/default/tailscaled <<'EOF'
-PORT=\"41641\"
-FLAGS=\"--tun=userspace-networking\"
-EOF
-# shellcheck disable=SC2086
-cat >/etc/systemd/system/wetty.service <<EOF
-[Unit]
-Description=WeTTY browser terminal
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Environment=HOME=/home/$WEB_USER
-Environment=BROWSER=/usr/local/bin/incus-web-open
-Environment='INCUS_WEB_WORKSPACE_LABEL=$INCUS_WEB_WORKSPACE_LABEL'
-ExecStart=/usr/local/bin/wetty --host 127.0.0.1 --port $WETTY_PORT --base / --command 'runuser -u $WEB_USER -- /usr/bin/zsh -l'
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-if [[ '$SETUP_ENABLED' == '1' ]]; then
-  cat >/etc/systemd/system/incus-web-setup.service <<EOF
-[Unit]
-Description=incus-web dotfiles setup
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Environment=HOST=127.0.0.1
-Environment=PORT=$SETUP_PORT
-Environment=WEB_USER=$WEB_USER
-Environment=DOTFILES_SKIP_APT=$DOTFILES_SKIP_APT
-Environment=SETUP_ALLOWED_EMAILS=$SETUP_ALLOWED_EMAILS
-Environment=SETUP_ALLOW_KEY_PERSISTENCE=$SETUP_ALLOW_KEY_PERSISTENCE
-Environment=SETUP_COMMAND_TIMEOUT_MS=$SETUP_COMMAND_TIMEOUT_MS
-ExecStart=/usr/local/bin/incus-web-bootstrap-server
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  systemctl enable incus-web-setup
-  systemctl restart incus-web-setup
-else
-  systemctl disable --now incus-web-setup >/dev/null 2>&1 || true
-fi
-if [[ '$TERMINAL_BACKEND' == 'ghostty-web' ]]; then
-  # shellcheck disable=SC2086
-  cat >/etc/systemd/system/ghostty-web.service <<EOF
-[Unit]
-Description=Ghostty web terminal
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=$WEB_USER
-WorkingDirectory=$CONTAINER_WORKSPACE
-Environment=HOME=/home/$WEB_USER
-Environment=SHELL=/usr/bin/zsh
-Environment=BROWSER=/usr/local/bin/incus-web-open
-Environment='INCUS_WEB_WORKSPACE_LABEL=$INCUS_WEB_WORKSPACE_LABEL'
-Environment=HOST=127.0.0.1
-Environment=PORT=$WETTY_PORT
-Environment=GHOSTTY_ALLOWED_HOSTS=$ghostty_allowed_hosts
-ExecStart=/usr/local/bin/ghostty-web-demo
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  systemctl disable --now wetty >/dev/null 2>&1 || true
-  systemctl stop wetty >/dev/null 2>&1 || true
-  systemctl reset-failed wetty >/dev/null 2>&1 || true
-  systemctl mask --force wetty >/dev/null 2>&1 || true
-  systemctl daemon-reload
-  systemctl enable ghostty-web
-  systemctl restart ghostty-web
-else
-  systemctl unmask wetty >/dev/null 2>&1 || true
-  systemctl disable --now ghostty-web >/dev/null 2>&1 || true
-  systemctl enable wetty
-  systemctl restart wetty
-fi"
+  push_container_provision_program "$name"
+  container_bash "$name" "env \
+    WEB_USER=$(printf %q "$WEB_USER") \
+    CONTAINER_WORKSPACE=$(printf %q "$CONTAINER_WORKSPACE") \
+    INCUS_WEB_WORKSPACE_LABEL=$(printf %q "$INCUS_WEB_WORKSPACE_LABEL") \
+    CODEX_VERSION=$(printf %q "$CODEX_VERSION") \
+    WETTY_PORT=$(printf %q "$WETTY_PORT") \
+    SETUP_ENABLED=$(printf %q "$SETUP_ENABLED") \
+    SETUP_PORT=$(printf %q "$SETUP_PORT") \
+    DOTFILES_SKIP_APT=$(printf %q "$DOTFILES_SKIP_APT") \
+    SETUP_ALLOWED_EMAILS=$(printf %q "$SETUP_ALLOWED_EMAILS") \
+    SETUP_ALLOW_KEY_PERSISTENCE=$(printf %q "$SETUP_ALLOW_KEY_PERSISTENCE") \
+    SETUP_COMMAND_TIMEOUT_MS=$(printf %q "$SETUP_COMMAND_TIMEOUT_MS") \
+    TERMINAL_BACKEND=$(printf %q "$TERMINAL_BACKEND") \
+    GHOSTTY_ALLOWED_HOSTS=$(printf %q "$ghostty_allowed_hosts") \
+    /usr/local/lib/incus-web/container-provision.sh"
 
   configure_user_bootstrap "$name"
 }
@@ -1794,12 +1671,30 @@ ensure_tailscale_installed() {
   local name="$1"
 
   log "installing Tailscale"
+  # shellcheck disable=SC2016
   container_bash "$name" 'set -euo pipefail
-if ! command -v tailscale >/dev/null 2>&1; then
-  curl -fsSL https://tailscale.com/install.sh | sh
+version="1.98.8"
+arch="$(dpkg --print-architecture)"
+case "$arch" in
+  amd64) sha256=3a55b5900dd7e11e09b6c74d1e46d223d549dfbefbdc1f044a8ab7bdbafb933c ;;
+  arm64) sha256=53eb3ce89d062fd34e393d24a6c8ec08c769fede8eb77fe9c6e347ad4ae00f84 ;;
+  *) echo "unsupported Tailscale architecture: $arch" >&2; exit 1 ;;
+esac
+if ! command -v tailscale >/dev/null 2>&1 || ! tailscale version | head -1 | grep -Fxq "$version"; then
+  tmp_dir="$(mktemp -d)"
+  archive="tailscale_${version}_${arch}.tgz"
+  curl --proto "=https" --tlsv1.2 -fsSL "https://pkgs.tailscale.com/stable/$archive" -o "$tmp_dir/$archive"
+  printf "%s  %s\n" "$sha256" "$tmp_dir/$archive" | sha256sum -c -
+  tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
+  release_dir="$tmp_dir/tailscale_${version}_${arch}"
+  install -m 755 "$release_dir/tailscale" "$release_dir/tailscaled" /usr/local/bin/
+  install -m 644 "$release_dir/systemd/tailscaled.service" /etc/systemd/system/tailscaled.service
+  install -m 644 "$release_dir/systemd/tailscale-online.target" /etc/systemd/system/tailscale-online.target
+  install -m 644 "$release_dir/systemd/tailscale-wait-online.service" /etc/systemd/system/tailscale-wait-online.service
+  rm -rf "$tmp_dir"
 fi
 install -d -m 755 /etc/default
-cat >/etc/default/tailscaled <<'"'"'EOF'"'"'
+cat >/etc/default/tailscaled <<EOF
 PORT="41641"
 FLAGS="--tun=userspace-networking"
 EOF
@@ -1971,6 +1866,10 @@ configure_access() {
       configure_oidc_proxy "$name"
       configure_oidc_host_proxy "$name"
       ;;
+    none)
+      [[ "${INCUS_WEB_ALLOW_NO_ACCESS:-0}" == "1" ]] || die "ACCESS_MODE=none requires INCUS_WEB_ALLOW_NO_ACCESS=1"
+      log "skipping external access configuration for isolated validation"
+      ;;
     *)
       die "unsupported ACCESS_MODE: $ACCESS_MODE"
       ;;
@@ -2046,7 +1945,11 @@ validate_container() {
       fi
       ;;
   esac
-  agent_check "nc -vz -w 5 1.1.1.1 443"
+  if [[ "$VALIDATE_INTERNET_EGRESS" == "1" ]]; then
+    agent_check "nc -vz -w 5 1.1.1.1 443"
+  else
+    log "skipping Internet egress probe; LAN isolation checks remain enabled"
+  fi
   expect_blocked_lan 10.0.0.1 80
   expect_blocked_lan 172.16.0.1 80
   expect_blocked_lan 192.168.0.1 80

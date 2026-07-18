@@ -19,12 +19,13 @@ export function AgentRunSessionPage({
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string>();
 
-  const refreshRun = React.useCallback(async () => {
+  const refreshRun = React.useCallback(async (signal?: AbortSignal) => {
     try {
       const response = await fetch(
         `/api/workspaces/${workspaceId}/agent-runs/${runId}`,
         {
           headers: { "Cache-Control": "no-store" },
+          signal,
         },
       );
       const body = await response.json().catch(() => undefined);
@@ -38,6 +39,7 @@ export function AgentRunSessionPage({
       setRun(body.run);
       setError(undefined);
     } catch (refreshError) {
+      if (signal?.aborted) return;
       setError(
         refreshError instanceof Error
           ? refreshError.message
@@ -57,10 +59,20 @@ export function AgentRunSessionPage({
 
   React.useEffect(() => {
     if (run && run.status !== "queued" && run.status !== "running") return;
-    const timer = window.setInterval(() => {
-      void refreshRun();
-    }, 2000);
-    return () => window.clearInterval(timer);
+    let timer: number | undefined;
+    let cancelled = false;
+    let controller: AbortController | undefined;
+    const poll = async () => {
+      controller = new AbortController();
+      await refreshRun(controller.signal);
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 2000);
+    };
+    timer = window.setTimeout(() => void poll(), 2000);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [refreshRun, run]);
 
   return (

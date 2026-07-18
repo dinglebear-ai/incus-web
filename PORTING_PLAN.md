@@ -1,12 +1,14 @@
 # incus-unraid → incus-web: Full Parity, Elevated
 
+> Historical implementation plan. The image builder, live telemetry, resource/mount configuration, snapshots, devcontainer/mise import, activity stream, and SSE surfaces described below have shipped. Use `openwiki/quickstart.md` and `openwiki/architecture.md` for current behavior; remaining unchecked prose is design history rather than an active status list.
+
 Everything incus-unraid can do, incus-web will do — with a typed provisioner contract instead of a config file, an async job model instead of blocking calls, and a dashboard worth showing off instead of a settings page. Research verified by direct reads of `/home/jmagar/workspace/incus-unraid` (NestJS/GraphQL + Vue 3, Unraid plugin) and `/home/jmagar/workspace/incus-web` (this repo: Next.js 16 + a Node.js host provisioner over a Unix socket). distrobuilder specifics verified against the [official docs](https://linuxcontainers.org/distrobuilder/docs/latest/).
 
 ---
 
 ## 1. Where we start, where we land
 
-incus-web already wins on foundations: a closed, typed command contract (`contracts.ts`, every command payload/result validated with `hasOnlyKeys`), reverse-proxy identity, a working CI image pipeline, ZFS golden-container cloning for fast ephemeral runs. What it doesn't have is everything that makes a container platform feel *alive* day-to-day: you can't build a custom image without editing YAML and pushing to `main`, you can't change a container's resources without SSHing in, and the dashboard shows you a static snapshot instead of what's actually happening.
+incus-web already wins on foundations: a closed, typed command contract (`contracts.ts`, every command payload/result validated with `hasOnlyKeys`), reverse-proxy identity, a working CI image pipeline, ZFS golden-container cloning for fast ephemeral runs, an isolated custom-image builder, resource/mount/snapshot mutation APIs, and live dashboard telemetry.
 
 incus-unraid has all of that — a live image builder, per-container resource editing, real-time stats, config editing from the UI — but it's built on a looser trust model (one shared GraphQL config surface, no distinct authorization tiers, string-templated build definitions). We're not porting that model. We're porting the *capability* and building it on incus-web's stricter foundation: every new mutating command gets the same discriminated-union + allow-list treatment as the existing eight, every privileged operation gets its own isolation boundary, and the dashboard becomes the best-looking part of the whole system.
 

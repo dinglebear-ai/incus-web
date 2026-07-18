@@ -17,9 +17,8 @@ incus-web creates browser-accessible developer workspaces inside Incus system co
 Create a working directory and configure secrets:
 
 ```bash
-mkdir -p ~/incus-web-run
+git clone https://github.com/jmagar/incus-web.git ~/incus-web-run
 cd ~/incus-web-run
-curl -fsSLO https://raw.githubusercontent.com/jmagar/incus-web/main/.env.example
 cp .env.example .env
 chmod 600 .env
 editor .env  # Configure ACCESS_MODE and related secrets
@@ -30,8 +29,6 @@ editor .env  # Configure ACCESS_MODE and related secrets
 Run the deploy script from the repository:
 
 ```bash
-git clone https://github.com/jmagar/incus-web.git
-cd incus-web
 ./deploy.sh
 ```
 
@@ -93,7 +90,7 @@ incus-web consists of three major components:
 
 ### Workflows
 - [**Deployment**](workflows/deployment.md) - How to deploy and configure incus-web
-- [**Workspace Lifecycle**](workspaces/workspace-lifecycle.md) - Creating and managing workspaces
+- [**Workspace Lifecycle**](workflows/workspace-lifecycle.md) - Creating and managing workspaces
 - [**Agent Runs**](workflows/agent-runs.md) - Dispatching AI agents in ephemeral containers
 
 ### Domain Concepts
@@ -105,6 +102,8 @@ incus-web consists of three major components:
 - [**Configuration**](operations/configuration.md) - Environment variables and settings
 - [**Security**](operations/security.md) - Security model, boundaries, and hardening
 - [**Testing**](operations/testing.md) - Static tests, smoke tests, and unit tests
+- [**Backup and Restore**](operations/backup-restore.md) - SQLite state backup, integrity, and restore procedure
+- [**Monitoring and Alerts**](operations/monitoring.md) - Readiness gauges, alert thresholds, and response runbooks
 
 ## Key Design Principles
 
