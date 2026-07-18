@@ -955,7 +955,7 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
     Record<string, Workspace>
   >({});
   const workspaces = inventory.workspaces.map(
-    (workspace) => liveWorkspaces[workspace.id] ?? workspace,
+    (workspace) => newestWorkspace(workspace, liveWorkspaces[workspace.id]),
   );
   const primaryWorkspace = activeWorkspace(workspaces, activeWorkspaceId);
 
@@ -1141,4 +1141,17 @@ function DashboardShell({ inventory }: { inventory: WorkspaceInventory }) {
 
 function activeWorkspace(workspaces: Workspace[], activeWorkspaceId: string | undefined) {
   return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0];
+}
+
+function newestWorkspace(authoritative: Workspace, live: Workspace | undefined) {
+  if (!live) return authoritative;
+  const authoritativeUpdatedAt = Date.parse(authoritative.updatedAt);
+  const liveUpdatedAt = Date.parse(live.updatedAt);
+  if (
+    Number.isFinite(authoritativeUpdatedAt) &&
+    (!Number.isFinite(liveUpdatedAt) || authoritativeUpdatedAt > liveUpdatedAt)
+  ) {
+    return authoritative;
+  }
+  return live;
 }

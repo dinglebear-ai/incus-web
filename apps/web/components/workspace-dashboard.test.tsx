@@ -134,6 +134,40 @@ describe("WorkspaceDashboard", () => {
     expect(screen.getByText("No workspace access")).toBeInTheDocument();
   });
 
+  it("prefers a newer refreshed inventory snapshot over stale live cache", async () => {
+    const stopped = {
+      ...inventory,
+      workspaces: [
+        {
+          ...inventory.workspaces[0],
+          state: "stopped" as const,
+        },
+      ],
+    };
+    const { rerender } = render(<WorkspaceDashboard inventory={stopped} />);
+    expect(screen.getByRole("button", { name: /start/i })).toBeEnabled();
+
+    rerender(
+      <WorkspaceDashboard
+        inventory={{
+          ...inventory,
+          workspaces: [
+            {
+              ...inventory.workspaces[0],
+              state: "running",
+              updatedAt: "2026-06-30T00:01:00.000Z",
+            },
+          ],
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /restart/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
+    });
+  });
+
   it("submits an agent run and displays progress identity", async () => {
     const failedCodexRun = {
       id: "run_20260702000102_ab12cd34",
