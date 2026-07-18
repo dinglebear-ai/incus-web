@@ -192,6 +192,7 @@ require_literal "expect_blocked_lan 192.168.0.1 80"
 require_literal "expect_blocked_lan 169.254.0.1 80"
 require_literal "validate_container_signals \"\$name\""
 require_literal "validate_container \"\$CONTAINER_NAME\""
+require_literal "log_deploy_summary()"
 require_literal "configure_host_provisioner \"\$CONTAINER_NAME\""
 require_literal "configure_host_web_app"
 require_literal "INCUS_PROFILE_YAML="
@@ -224,6 +225,10 @@ printf 'INCUS_WEB_SOURCE_REF=%s\n' '0123456789abcdef0123456789abcdef01234567' >"
 loaded_ref="$(ENV_FILE="$bootstrap_env" bash -c 'source "$1/deploy.sh" >/dev/null; printf "%s" "$INCUS_WEB_SOURCE_REF"' _ "$root")"
 if [[ "$loaded_ref" != "0123456789abcdef0123456789abcdef01234567" ]]; then
   printf 'deploy.sh did not load INCUS_WEB_SOURCE_REF from ENV_FILE before validation\n' >&2
+  exit 1
+fi
+if ! bash -c 'source "$1" >/dev/null; CONTAINER_NAME=test; HOST_WORKSPACE=/tmp/test; CONTAINER_WORKSPACE=/workspace; ACCESS_MODE=none; log_deploy_summary >/dev/null' _ "$deploy"; then
+  printf 'successful deployment summary returned a failure status\n' >&2
   exit 1
 fi
 

@@ -310,6 +310,7 @@ log_deploy_summary() {
   log "access mode: $ACCESS_MODE"
   [[ "$ACCESS_MODE" == "tailscale" ]] && log "tailnet host: $TS_HOSTNAME"
   [[ "$ACCESS_MODE" == "oidc" ]] && log "public URL: $PUBLIC_URL"
+  return 0
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
