@@ -26,26 +26,70 @@ type RouteContext = {
   }>;
 };
 
-// Coalesces genuinely concurrent `GetWorkspaceStatus` polls for the same
-// workspace into a single provisioner round trip — e.g. multiple open
-// dashboard tabs (or, later, multiple visible cards) polling the same
-// workspace at the same moment. This intentionally does NOT cache the
-// result past the in-flight request: it's removed from the map as soon as
-// it settles, so every poll after that still gets a fresh provisioner call
-// and no request is ever served stale data from a prior tick.
+const TELEMETRY_SAMPLE_INTERVAL_MS = 5_000;
+const MAX_STATUS_SNAPSHOTS = 256;
+
+type WorkspaceSnapshot = {
+  operation: ProvisionerOperation<"GetWorkspaceStatus">;
+  workspace?: ReturnType<typeof statusToWorkspace>;
+  history?: ReturnType<typeof appendTelemetry>;
+};
+
+// A dashboard can be open in several tabs whose polling intervals are offset.
+// Cache the completed status and telemetry history for one short sampling
+// interval so those viewers neither fan out provisioner calls nor persist a
+// separate sample. The in-flight map covers viewers arriving during refresh.
+const statusSnapshots = new Map<
+  string,
+  { expiresAt: number; snapshot: WorkspaceSnapshot }
+>();
 const inFlightStatusRequests = new Map<
   string,
-  Promise<ProvisionerOperation<"GetWorkspaceStatus">>
+  Promise<WorkspaceSnapshot>
 >();
-function cachedWorkspaceStatus(actor: ActorContext, workspaceId: string) {
+function cachedWorkspaceStatus(
+  actor: ActorContext,
+  workspaceId: string,
+  ownerUserId: string,
+): Promise<WorkspaceSnapshot> {
+  const cached = statusSnapshots.get(workspaceId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return Promise.resolve(cached.snapshot);
+  }
+  statusSnapshots.delete(workspaceId);
+
   const existing = inFlightStatusRequests.get(workspaceId);
   if (existing) return existing;
 
-  const promise = sendWorkspaceCommand(actor, "GetWorkspaceStatus", {}).finally(() => {
-    inFlightStatusRequests.delete(workspaceId);
-  });
+  const promise: Promise<WorkspaceSnapshot> = sendWorkspaceCommand(actor, "GetWorkspaceStatus", {})
+    .then((operation) => {
+      if (operation.status !== "succeeded" || !operation.result) {
+        return { operation };
+      }
+      const workspace = statusToWorkspace(operation.result, ownerUserId);
+      const history = appendTelemetrySample(workspaceId, workspace);
+      const snapshot = { operation, workspace, history };
+      statusSnapshots.set(workspaceId, {
+        expiresAt: Date.now() + TELEMETRY_SAMPLE_INTERVAL_MS,
+        snapshot,
+      });
+      while (statusSnapshots.size > MAX_STATUS_SNAPSHOTS) {
+        const oldestWorkspaceId = statusSnapshots.keys().next().value;
+        if (oldestWorkspaceId === undefined) break;
+        statusSnapshots.delete(oldestWorkspaceId);
+      }
+      return snapshot;
+    })
+    .finally(() => {
+      inFlightStatusRequests.delete(workspaceId);
+    });
   inFlightStatusRequests.set(workspaceId, promise);
   return promise;
+}
+
+export function resetWorkspaceStatusCacheForTests() {
+  statusSnapshots.clear();
+  inFlightStatusRequests.clear();
 }
 
 // Lightweight per-workspace status poll used by the dashboard's live
@@ -72,18 +116,13 @@ export async function GET(_request: Request, context: RouteContext) {
     return jsonError("workspace_not_found", "workspace was not found", 404);
   }
 
-  const operation = await cachedWorkspaceStatus(actor, workspaceId);
-  if (operation.status !== "succeeded" || !operation.result) {
-    return Response.json(
-      { ok: false, operation },
-      { status: statusForProvisionerError(operation.error) },
-    );
-  }
-
-  const workspace = statusToWorkspace(operation.result, access.workspace.ownerUserId);
-  let history;
+  let snapshot;
   try {
-    history = appendTelemetrySample(workspaceId, workspace);
+    snapshot = await cachedWorkspaceStatus(
+      actor,
+      workspaceId,
+      access.workspace.ownerUserId,
+    );
   } catch (error) {
     return Response.json(
       {
@@ -96,6 +135,15 @@ export async function GET(_request: Request, context: RouteContext) {
       { status: 503 },
     );
   }
+  const { operation } = snapshot;
+  if (operation.status !== "succeeded" || !operation.result) {
+    return Response.json(
+      { ok: false, operation },
+      { status: statusForProvisionerError(operation.error) },
+    );
+  }
+
+  const { workspace, history } = snapshot;
   return Response.json({ ok: true, workspace, history });
 }
 

@@ -17,9 +17,20 @@ describe("readyz route", () => {
   });
 
   it("fails when the provisioner is unavailable", async () => {
-    provisionerReadiness.mockResolvedValue({ ok: false, configured: true, message: "offline" });
+    provisionerReadiness.mockResolvedValue({
+      ok: false,
+      configured: true,
+      message: "connect ECONNREFUSED /run/incus-web/provisioner.sock",
+    });
     const response = await GET();
     expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toMatchObject({ ok: false });
+    const body = await response.json();
+    expect(body).toMatchObject({
+      ok: false,
+      dependencies: { provisioner: { ok: false, configured: true } },
+    });
+    expect(JSON.stringify(body)).not.toContain("ECONNREFUSED");
+    expect(JSON.stringify(body)).not.toContain("provisioner.sock");
   });
 });
+// @vitest-environment node

@@ -6,11 +6,17 @@ mode="${1:-backup}"
 backup_dir="${2:-/var/backups/incus-web/$(date -u +%Y%m%dT%H%M%SZ)}"
 workspace_db="${INCUS_WEB_WORKSPACE_STATE_DB:-/var/lib/incus-web-app/workspace-state.sqlite3}"
 build_db="${INCUS_WEB_BUILD_WORKER_DB:-/var/lib/incus-web/build-worker/builds.sqlite3}"
+agent_runs_db="${INCUS_WEB_AGENT_RUN_STORE_PATH:-/var/lib/incus-web/agent-runs.sqlite}"
+provisioner_db="${INCUS_WEB_PROVISIONER_STATE_DB:-/var/lib/incus-web/provisioner.sqlite}"
 
 case "$mode" in
   backup)
     install -d -m 700 "$backup_dir"
-    for entry in "workspace:$workspace_db" "build-worker:$build_db"; do
+    for entry in \
+      "workspace:$workspace_db" \
+      "build-worker:$build_db" \
+      "agent-runs:$agent_runs_db" \
+      "provisioner:$provisioner_db"; do
       name="${entry%%:*}"
       source_db="${entry#*:}"
       [[ -f "$source_db" ]] || continue

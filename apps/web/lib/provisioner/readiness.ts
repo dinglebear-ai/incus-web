@@ -35,7 +35,11 @@ export async function provisionerReadiness(): Promise<{
           response.resume();
           response.once("end", () => {
             const status = response.statusCode ?? 500;
-            if (status >= 500) reject(new Error(`provisioner returned ${status}`));
+            // A schema error proves the authenticated server handled the
+            // request. Authentication and server failures do not prove ready.
+            if (status === 401 || status === 403 || status >= 500) {
+              reject(new Error(`provisioner returned ${status}`));
+            }
             else resolve();
           });
         },

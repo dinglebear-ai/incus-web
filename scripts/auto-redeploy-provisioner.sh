@@ -6,7 +6,7 @@ BRANCH="main"
 PROVISIONER_INSTALL_PATH="${INCUS_WEB_PROVISIONER_INSTALL_PATH:-/usr/local/lib/incus-web/provisioner-server.mjs}"
 AGENT_RUNS_INSTALL_PATH="${INCUS_WEB_PROVISIONER_AGENT_RUNS_INSTALL_PATH:-/usr/local/lib/incus-web/agent-runs.mjs}"
 SERVICE_AUTH_INSTALL_PATH="${INCUS_WEB_PROVISIONER_SERVICE_AUTH_INSTALL_PATH:-/usr/local/lib/incus-web/service-auth.mjs}"
-AGENT_RUN_STORE_PATH="${INCUS_WEB_AGENT_RUN_STORE_PATH:-/var/lib/incus-web/agent-runs.json}"
+AGENT_RUN_STORE_PATH="${INCUS_WEB_AGENT_RUN_STORE_PATH:-/var/lib/incus-web/agent-runs.sqlite}"
 SERVICE_NAME="incus-web-provisioner.service"
 # Marks that files were synced but the restart was deferred because a run
 # was in progress. Persists across ticks so a deferred restart isn't
@@ -24,22 +24,13 @@ log() {
 # next tick rather than dropping it.
 has_active_agent_run() {
   [[ -f "$AGENT_RUN_STORE_PATH" ]] || return 1
-  AGENT_RUN_STORE_PATH="$AGENT_RUN_STORE_PATH" python3 -c '
-import json, os, sys
-
-path = os.environ["AGENT_RUN_STORE_PATH"]
-try:
-    with open(path) as f:
-        runs = json.load(f)
-except Exception:
-    sys.exit(1)
-
-terminal = {"succeeded", "failed"}
-for run in runs:
-    if run.get("status") not in terminal:
-        sys.exit(0)
-sys.exit(1)
-'
+  AGENT_RUN_STORE_PATH="$AGENT_RUN_STORE_PATH" node --input-type=module -e '
+import { DatabaseSync } from "node:sqlite";
+const db = new DatabaseSync(process.env.AGENT_RUN_STORE_PATH);
+const active = db.prepare("SELECT 1 FROM agent_runs WHERE status IN (?, ?) LIMIT 1").get("queued", "running");
+db.close();
+process.exit(active ? 0 : 1);
+' 2>/dev/null
 }
 
 cd "$REPO_DIR"

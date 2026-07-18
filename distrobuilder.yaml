@@ -165,7 +165,7 @@ actions:
       fi
 
       if ! command -v wetty >/dev/null 2>&1; then
-        npm install -g wetty@2.7.0
+        npm install -g wetty@3.2.0
       fi
 
       if ! command -v ghostty-web-demo >/dev/null 2>&1; then

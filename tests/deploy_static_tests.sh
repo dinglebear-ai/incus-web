@@ -11,6 +11,7 @@ container_provision="$root/scripts/container-provision.sh"
 info_script="$root/scripts/incus-web-info.sh"
 smoke_image="$root/scripts/smoke-image.sh"
 workflow="$root/.github/workflows/build-image.yml"
+backup_state="$root/scripts/backup-state.sh"
 contract_doc="$root/docs/contracts/provisioner-boundary-v1.md"
 provisioner_plan="$root/docs/superpowers/plans/2026-07-01-provisioner-boundary-v1.md"
 env_example="$root/.env.example"
@@ -364,6 +365,18 @@ if ! grep -Fq -- "host-local is the default provisioner mode" "$contract_doc"; t
   printf 'missing expected host-local default docs\n' >&2
   exit 1
 fi
+for needle in \
+  'INCUS_WEB_WORKSPACE_STATE_DB' \
+  'INCUS_WEB_BUILD_WORKER_DB' \
+  'INCUS_WEB_AGENT_RUN_STORE_PATH' \
+  'INCUS_WEB_PROVISIONER_STATE_DB' \
+  "\"agent-runs:\$agent_runs_db\"" \
+  "\"provisioner:\$provisioner_db\""; do
+  if ! grep -Fq -- "$needle" "$backup_state"; then
+    printf 'missing expected durable backup surface: %s\n' "$needle" >&2
+    exit 1
+  fi
+done
 if ! grep -Fq -- "Next.js request handlers must continue to call the provisioner contract" "$contract_doc"; then
   printf 'missing expected Next.js boundary docs\n' >&2
   exit 1
@@ -506,7 +519,7 @@ for needle in \
   "rustc" \
   'node_version="22.17.0"' \
   "npm install -g @anthropic-ai/claude-code@2.1.212" \
-  "npm install -g wetty@2.7.0" \
+  "npm install -g wetty@3.2.0" \
   "@ghostty-web/demo@0.4.0-next.20.g1858a59" \
   "ghostty-web-demo" \
   "https://pkgs.tailscale.com/stable/\$tailscale_archive" \

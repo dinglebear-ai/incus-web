@@ -96,6 +96,7 @@ jobs:
           bash tests/deploy_static_tests.sh
           find scripts tests -type f -name '*.sh' -print0 | xargs -0 bash -n
           find scripts -type f -name '*.mjs' -print0 | xargs -0 node --check
+          node --test tests/export_onboarding_test.mjs
           node tests/build_worker_smoke.mjs
           node tests/check_markdown_links.mjs
           find scripts tests -type f -name '*.sh' -print0 | xargs -0 shellcheck
@@ -157,7 +158,7 @@ jobs:
             --arg nodeVersion "22.17.0" \
             --arg claudeCodeVersion "2.1.212" \
             --arg codexVersion "0.144.3" \
-            --arg wettyVersion "2.7.0" \
+            --arg wettyVersion "3.2.0" \
             --arg tailscaleVersion "1.98.8" \
             '{sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,definitionSha256:$definitionSha256,toolchain:{node:$nodeVersion,claudeCode:$claudeCodeVersion,codex:$codexVersion,wetty:$wettyVersion,tailscale:$tailscaleVersion}}' \
             > dist/BUILD-METADATA.json

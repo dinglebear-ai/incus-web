@@ -9,9 +9,12 @@ export type PackageSearchResult = {
 const CACHE_TTL_MS = 60_000;
 const CATALOG_TTL_MS = 15 * 60_000;
 const MAX_QUERY_CACHE_ENTRIES = 128;
+const MAX_CONCURRENT_SEARCHES = 8;
 const MAX_HOMEBREW_RESPONSE_BYTES = 40 * 1024 * 1024;
 const cache = new Map<string, { expiresAt: number; results: PackageSearchResult[] }>();
 const inFlight = new Map<string, Promise<PackageSearchResult[]>>();
+const searchWaiters: Array<() => void> = [];
+let activeSearches = 0;
 let homebrewCatalog:
   | { expiresAt: number; entries: Array<{ name: string; desc?: string }> }
   | undefined;
@@ -31,20 +34,25 @@ export async function searchPackages(query: string): Promise<PackageSearchResult
   if (existing) return existing;
 
   const request = (async () => {
-    const settled = await Promise.allSettled([
-      searchNpm(normalized),
-      searchPypi(normalized),
-      searchHomebrew(normalized),
-      searchApt(normalized),
-    ]);
-    const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? entry.value : []));
-    cache.set(normalized, { expiresAt: Date.now() + CACHE_TTL_MS, results });
-    while (cache.size > MAX_QUERY_CACHE_ENTRIES) {
-      const oldest = cache.keys().next().value;
-      if (oldest === undefined) break;
-      cache.delete(oldest);
+    const release = await acquireSearchSlot();
+    try {
+      const settled = await Promise.allSettled([
+        searchNpm(normalized),
+        searchPypi(normalized),
+        searchHomebrew(normalized),
+        searchApt(normalized),
+      ]);
+      const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? entry.value : []));
+      cache.set(normalized, { expiresAt: Date.now() + CACHE_TTL_MS, results });
+      while (cache.size > MAX_QUERY_CACHE_ENTRIES) {
+        const oldest = cache.keys().next().value;
+        if (oldest === undefined) break;
+        cache.delete(oldest);
+      }
+      return results;
+    } finally {
+      release();
     }
-    return results;
   })();
   inFlight.set(normalized, request);
   try {
@@ -52,6 +60,22 @@ export async function searchPackages(query: string): Promise<PackageSearchResult
   } finally {
     inFlight.delete(normalized);
   }
+}
+
+async function acquireSearchSlot() {
+  if (activeSearches >= MAX_CONCURRENT_SEARCHES) {
+    await new Promise<void>((resolve) => searchWaiters.push(resolve));
+  } else {
+    activeSearches += 1;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = searchWaiters.shift();
+    if (next) next();
+    else activeSearches -= 1;
+  };
 }
 
 async function searchNpm(query: string): Promise<PackageSearchResult[]> {
@@ -127,6 +151,8 @@ async function getHomebrewCatalog(): Promise<Array<{ name: string; desc?: string
 export function resetPackageSearchCachesForTests() {
   cache.clear();
   inFlight.clear();
+  activeSearches = 0;
+  searchWaiters.splice(0);
   homebrewCatalog = undefined;
   homebrewCatalogRequest = undefined;
 }

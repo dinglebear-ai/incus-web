@@ -11,6 +11,10 @@ export const CODEX_APP_SERVER_NOT_CONFIGURED =
 const terminalPhases = new Set(["succeeded", "failed"]);
 const defaultAgentRunLogLimit = 5000;
 const defaultAgentRunHistoryLimit = 1000;
+const websocketHandshakeLimitBytes = 1024 * 1024;
+const websocketFrameLimitBytes = 1024 * 1024;
+const websocketMessageLimitBytes = 1024 * 1024;
+const websocketHandshakeDelimiter = Buffer.from("\r\n\r\n", "latin1");
 const schedulerStates = new WeakMap();
 
 export function agentRunConfigFromEnv(env = process.env) {
@@ -46,10 +50,13 @@ export function agentRunConfigFromEnv(env = process.env) {
 
 export function createAgentRunStore(path, options = {}) {
   mkdirSyncParent(path);
-  const legacyRuns = migrateLegacyJson(path);
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
-  db.exec(`
+  const legacyMigration = stageLegacyJson(path);
+  const legacyRuns = legacyMigration.runs;
+  let db;
+  try {
+    db = new DatabaseSync(path);
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
+    db.exec(`
     CREATE TABLE IF NOT EXISTS agent_runs (
       id TEXT PRIMARY KEY,
       request_id TEXT NOT NULL UNIQUE,
@@ -74,35 +81,40 @@ export function createAgentRunStore(path, options = {}) {
     );
     CREATE INDEX IF NOT EXISTS agent_run_logs_run_sequence
       ON agent_run_logs(run_id, sequence DESC);
-  `);
-  if (legacyRuns.length > 0) {
-    const insertLegacy = db.prepare(`INSERT OR IGNORE INTO agent_runs
+    `);
+    if (legacyRuns.length > 0) {
+      const insertLegacy = db.prepare(`INSERT OR IGNORE INTO agent_runs
       (id, request_id, workspace_id, owner_user_id, status, phase, created_at, updated_at, run_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    const insertLegacyLog = db.prepare(
-      "INSERT INTO agent_run_logs (run_id, at, level, message) VALUES (?, ?, ?, ?)",
-    );
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const legacy of legacyRuns) {
-        const migrated = {
-          ...legacy,
-          requestId: legacy.requestId || `legacy-${legacy.id}`,
-          requestFingerprint: legacy.requestFingerprint || "legacy",
-        };
-        insertLegacy.run(migrated.id, migrated.requestId, migrated.workspaceId,
-          migrated.ownerUserId, migrated.status, migrated.phase, migrated.createdAt,
-          migrated.updatedAt || migrated.createdAt, JSON.stringify(migrated));
-        for (const entry of Array.isArray(legacy.logs) ? legacy.logs.slice(-agentRunLogLimit()) : []) {
-          insertLegacyLog.run(migrated.id, entry.at || migrated.createdAt,
-            entry.level || "info", String(entry.message || ""));
+      const insertLegacyLog = db.prepare(
+        "INSERT INTO agent_run_logs (run_id, at, level, message) VALUES (?, ?, ?, ?)",
+      );
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const legacy of legacyRuns) {
+          const migrated = {
+            ...legacy,
+            requestId: legacy.requestId || `legacy-${legacy.id}`,
+            requestFingerprint: legacy.requestFingerprint || "legacy",
+          };
+          insertLegacy.run(migrated.id, migrated.requestId, migrated.workspaceId,
+            migrated.ownerUserId, migrated.status, migrated.phase, migrated.createdAt,
+            migrated.updatedAt || migrated.createdAt, JSON.stringify(migrated));
+          for (const entry of Array.isArray(legacy.logs) ? legacy.logs.slice(-agentRunLogLimit()) : []) {
+            insertLegacyLog.run(migrated.id, entry.at || migrated.createdAt,
+              entry.level || "info", String(entry.message || ""));
+          }
         }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
       }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
     }
+  } catch (error) {
+    db?.close();
+    restoreStagedLegacyJson(legacyMigration);
+    throw error;
   }
   const historyLimit = positiveInteger(options.historyLimit, agentRunHistoryLimit());
   const transaction = (fn) => (...args) => {
@@ -129,7 +141,7 @@ export function createAgentRunStore(path, options = {}) {
     return run;
   }
 
-  function updateRun(runId, patch) {
+  function updateRun(runId, patch, includeLogs = true) {
     const row = db.prepare("SELECT run_json FROM agent_runs WHERE id = ?").get(runId);
     if (!row) throw new Error(`agent run not found: ${runId}`);
     const current = JSON.parse(row.run_json);
@@ -148,13 +160,13 @@ export function createAgentRunStore(path, options = {}) {
         ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?
       )`).run(historyLimit);
     }
-    return rowToRun({ run_json: JSON.stringify(next) });
+    return rowToRun({ run_json: JSON.stringify(next) }, includeLogs);
   }
 
   return {
     async list(workspaceId, limit = 20) {
       return db.prepare(`SELECT run_json FROM agent_runs WHERE workspace_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`)
-        .all(workspaceId, clampLimit(limit)).map((row) => rowToRun(row));
+        .all(workspaceId, clampLimit(limit)).map((row) => rowToRun(row, false));
     },
     async get(runId, workspaceId, ownerUserId) {
       const row = db.prepare(`SELECT run_json FROM agent_runs WHERE id = ? AND workspace_id = ? AND owner_user_id = ?`)
@@ -164,15 +176,22 @@ export function createAgentRunStore(path, options = {}) {
     async getByRequestId(requestId) {
       return rowToRun(db.prepare("SELECT run_json FROM agent_runs WHERE request_id = ?").get(requestId));
     },
-    async countActive() {
-      return Number(db.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE status IN ('queued', 'running')").get().count);
-    },
     async listRecoverable() {
       return db.prepare(`SELECT run_json FROM agent_runs WHERE status IN ('queued', 'running') ORDER BY created_at ASC`)
         .all().map((row) => rowToRun(row, false));
     },
-    async insert(run) {
+    async insert(run, { maxActive } = {}) {
       transaction(() => {
+        if (Number.isFinite(maxActive)) {
+          const active = Number(db.prepare(
+            "SELECT COUNT(*) AS count FROM agent_runs WHERE status IN ('queued', 'running')",
+          ).get().count);
+          if (active >= maxActive) {
+            const error = new Error("agent run admission queue is full");
+            error.code = "timeout";
+            throw error;
+          }
+        }
         db.prepare(`INSERT INTO agent_runs
           (id, request_id, workspace_id, owner_user_id, status, phase, created_at, updated_at, run_json)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -200,10 +219,11 @@ export function createAgentRunStore(path, options = {}) {
         }
         db.prepare("INSERT INTO agent_run_logs (run_id, at, level, message) VALUES (?, ?, ?, ?)")
           .run(runId, entry.at, entry.level, entry.message);
-        db.prepare(`DELETE FROM agent_run_logs WHERE run_id = ? AND sequence NOT IN (
-          SELECT sequence FROM agent_run_logs WHERE run_id = ? ORDER BY sequence DESC LIMIT ?
-        )`).run(runId, runId, agentRunLogLimit());
-        return updateRun(runId, { lastLogExcerpt: entry.message, updatedAt: entry.at });
+        db.prepare(`DELETE FROM agent_run_logs WHERE run_id = ? AND sequence <= COALESCE((
+          SELECT sequence FROM agent_run_logs WHERE run_id = ?
+          ORDER BY sequence DESC LIMIT 1 OFFSET ?
+        ), -1)`).run(runId, runId, agentRunLogLimit());
+        return updateRun(runId, { lastLogExcerpt: entry.message, updatedAt: entry.at }, false);
       })();
     },
     close() { db.close(); },
@@ -222,13 +242,8 @@ export async function dispatchAgentRun(command, options) {
     }
     return { run: existing };
   }
-  if ((await store.countActive()) >= config.maxQueuedRuns) {
-    const error = new Error("agent run admission queue is full");
-    error.code = "timeout";
-    throw error;
-  }
   const run = createAgentRun(command, config);
-  await store.insert(run);
+  await store.insert(run, { maxActive: config.maxQueuedRuns });
 
   if (run.agent === "codex" && !config.codexAppServerUrl) {
     const failed = await store.update(run.id, {
@@ -254,10 +269,22 @@ export async function reconcileAgentRuns(options) {
   const recoverable = await store.listRecoverable();
   for (const run of recoverable) {
     if (run.status === "running") {
+      let restartError = new Error("provisioner restarted while the agent run was active");
+      try {
+        await cleanupAgentRunResources(run, options, {
+          credentialMayExist: true,
+          containerMayExist: true,
+        });
+      } catch (cleanupError) {
+        restartError = new AggregateError(
+          [restartError, cleanupError],
+          "provisioner restarted and orphan resource cleanup failed",
+        );
+      }
       await failRun(
         store,
         run.id,
-        new Error("provisioner restarted while the agent run was active"),
+        restartError,
       );
     } else if (options.execute !== false) {
       scheduleAgentRun(run, { ...options, config, store });
@@ -333,66 +360,71 @@ export async function executeAgentRun(run, options) {
     throw new Error("agent run executor is not configured");
   }
 
-  await store.update(run.id, {
-    phase: "cloning_container",
-    status: "running",
-    container: { state: "cloning" },
-    lastLogExcerpt: `Cloning ${run.container.sourceContainer} into ${run.container.name}`,
-  });
-  await store.appendLog(
-    run.id,
-    `Cloning ${run.container.sourceContainer} into ${run.container.name}`,
-  );
-  await incus(copyArgsForRun(run));
-
-  await store.update(run.id, {
-    phase: "starting_container",
-    container: { state: "starting" },
-    lastLogExcerpt: `Starting ${run.container.name}`,
-  });
-  await store.appendLog(run.id, `Starting ${run.container.name}`);
-  await incus(["--project", run.container.project, "start", run.container.name]);
-
-  await store.update(run.id, {
-    phase: "cloning_repo",
-    container: { state: "running" },
-    lastLogExcerpt: `Cloning ${run.repoUrl}`,
-  });
-  await store.appendLog(run.id, `Cloning ${run.repoUrl}`);
-  await execInContainer(run, cloneRepoScript(run));
-
-  await store.update(run.id, {
-    phase: "injecting_credentials",
-    lastLogExcerpt: `Injecting ${run.agent} credentials`,
-  });
-  await store.appendLog(run.id, `Injecting ${run.agent} credentials`);
-  const sourcePath = sourceCredentialPathForAgent(run.agent);
+  let containerMayExist = false;
+  let credentialMayExist = false;
+  let controller;
   const targetPath = targetCredentialPathForAgent(run.agent);
-  const credentialContent = await readHostCredentialWithRetry(
-    readHostCredential,
-    config.credentialSourceContainer,
-    config.credentialSourceProject,
-    sourcePath,
-  );
-  if (credentialContent === undefined) {
-    const err = new Error(missingCredentialMessage(run.agent, config));
-    err.code = "credential_not_found";
-    throw err;
-  }
-  const expiry = credentialExpiryInfo(run.agent, credentialContent);
-  if (expiry && expiry.expired) {
-    const err = new Error(staleCredentialMessage(run.agent, config, expiry));
-    err.code = "credential_expired";
-    throw err;
-  }
-  await injectCredential(
-    run.container.name,
-    run.container.project,
-    targetPath,
-    credentialContent,
-  );
-
   try {
+    await store.update(run.id, {
+      phase: "cloning_container",
+      status: "running",
+      container: { state: "cloning" },
+      lastLogExcerpt: `Cloning ${run.container.sourceContainer} into ${run.container.name}`,
+    });
+    await store.appendLog(
+      run.id,
+      `Cloning ${run.container.sourceContainer} into ${run.container.name}`,
+    );
+    containerMayExist = true;
+    await incus(copyArgsForRun(run));
+
+    await store.update(run.id, {
+      phase: "starting_container",
+      container: { state: "starting" },
+      lastLogExcerpt: `Starting ${run.container.name}`,
+    });
+    await store.appendLog(run.id, `Starting ${run.container.name}`);
+    await incus(["--project", run.container.project, "start", run.container.name]);
+
+    await store.update(run.id, {
+      phase: "cloning_repo",
+      container: { state: "running" },
+      lastLogExcerpt: `Cloning ${run.repoUrl}`,
+    });
+    await store.appendLog(run.id, `Cloning ${run.repoUrl}`);
+    await execInContainer(run, cloneRepoScript(run));
+
+    await store.update(run.id, {
+      phase: "injecting_credentials",
+      lastLogExcerpt: `Injecting ${run.agent} credentials`,
+    });
+    await store.appendLog(run.id, `Injecting ${run.agent} credentials`);
+    const sourcePath = sourceCredentialPathForAgent(run.agent);
+    const credentialContent = await readHostCredentialWithRetry(
+      readHostCredential,
+      config.credentialSourceContainer,
+      config.credentialSourceProject,
+      sourcePath,
+    );
+    if (credentialContent === undefined) {
+      const err = new Error(missingCredentialMessage(run.agent, config));
+      err.code = "credential_not_found";
+      throw err;
+    }
+    const expiry = credentialExpiryInfo(run.agent, credentialContent);
+    if (expiry && expiry.expired) {
+      const err = new Error(staleCredentialMessage(run.agent, config, expiry));
+      err.code = "credential_expired";
+      throw err;
+    }
+    credentialMayExist = true;
+    await injectCredential(
+      run.container.name,
+      run.container.project,
+      targetPath,
+      credentialContent,
+    );
+
     await store.update(run.id, {
       phase: "attaching_agent",
       lastLogExcerpt:
@@ -406,7 +438,7 @@ export async function executeAgentRun(run, options) {
         ? "Attaching Codex app-server controller"
         : "Launching Claude CLI controller",
     );
-    const controller = await startAgentController(run, config, execInContainer, {
+    controller = await startAgentController(run, config, execInContainer, {
       incus,
       onProgress: async (message) => {
         await store.appendLog(run.id, message);
@@ -425,22 +457,58 @@ export async function executeAgentRun(run, options) {
         : "Claude CLI controller completed",
       "success",
     );
-    return await store.update(run.id, {
-      phase: "succeeded",
-      status: "succeeded",
-      completedAt: new Date().toISOString(),
-      controller,
-      lastLogExcerpt:
-        run.agent === "codex"
-          ? "Codex app-server controller attached"
-          : "Claude CLI controller completed",
-    });
   } finally {
-    await deleteInjectedCredential(
-      run.container.name,
-      run.container.project,
-      targetPath,
-    );
+    await cleanupAgentRunResources(run, options, {
+      credentialMayExist,
+      containerMayExist,
+    });
+  }
+  return store.update(run.id, {
+    phase: "succeeded",
+    status: "succeeded",
+    completedAt: new Date().toISOString(),
+    container: { state: "deleted" },
+    controller,
+    lastLogExcerpt:
+      run.agent === "codex"
+        ? "Codex app-server controller attached"
+        : "Claude CLI controller completed",
+  });
+}
+
+async function cleanupAgentRunResources(
+  run,
+  options,
+  { credentialMayExist, containerMayExist },
+) {
+  const failures = [];
+  if (credentialMayExist && typeof options.deleteInjectedCredential === "function") {
+    try {
+      await options.deleteInjectedCredential(
+        run.container.name,
+        run.container.project,
+        targetCredentialPathForAgent(run.agent),
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (containerMayExist && typeof options.incus === "function") {
+    try {
+      await options.incus([
+        "--project",
+        run.container.project,
+        "delete",
+        run.container.name,
+        "--force",
+      ]);
+      await options.store.update(run.id, { container: { state: "deleted" } });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "agent run resource cleanup failed");
   }
 }
 
@@ -841,7 +909,6 @@ export async function failRun(store, runId, err) {
     phase: "failed",
     status: "failed",
     completedAt: new Date().toISOString(),
-    container: { state: "failed" },
     controller,
     error: message,
     lastLogExcerpt: message,
@@ -998,10 +1065,12 @@ function openJsonTextWebSocket({ url, token, timeoutMs }) {
 
   return new Promise((resolve, reject) => {
     let settled = false;
-    let handshake = Buffer.alloc(0);
-    let frames = Buffer.alloc(0);
+    let handshakeChunks = [];
+    let handshakeBytes = 0;
+    let handshakeDelimiterBytes = 0;
     let socket;
     let connection;
+    let frameParser;
     const timer = setTimeout(() => {
       fail(new Error("Timed out connecting to Codex app-server."));
     }, timeout);
@@ -1037,20 +1106,40 @@ function openJsonTextWebSocket({ url, token, timeoutMs }) {
     });
     socket.on("data", (chunk) => {
       if (settled) {
-        frames = Buffer.concat([frames, chunk]);
-        if (connection) {
-          drainWebSocketFrames(connection, frames, (nextFrames) => {
-            frames = nextFrames;
-          });
-        }
+        frameParser?.push(chunk);
         return;
       }
 
-      handshake = Buffer.concat([handshake, chunk]);
-      const split = handshake.indexOf("\r\n\r\n");
-      if (split === -1) return;
-      const rawHeaders = handshake.subarray(0, split).toString("latin1");
-      const remainder = handshake.subarray(split + 4);
+      handshakeChunks.push(chunk);
+      const previousBytes = handshakeBytes;
+      handshakeBytes += chunk.length;
+      let headerEnd = -1;
+      for (let index = 0; index < chunk.length; index += 1) {
+        const expected = websocketHandshakeDelimiter[handshakeDelimiterBytes];
+        if (chunk[index] === expected) {
+          handshakeDelimiterBytes += 1;
+          if (handshakeDelimiterBytes === 4) {
+            headerEnd = previousBytes + index + 1;
+            break;
+          }
+        } else {
+          handshakeDelimiterBytes = chunk[index] === 13 ? 1 : 0;
+        }
+      }
+      if (headerEnd === -1) {
+        if (handshakeBytes > websocketHandshakeLimitBytes) {
+          fail(new Error("Codex app-server WebSocket handshake exceeded 1 MiB."));
+        }
+        return;
+      }
+      if (headerEnd > websocketHandshakeLimitBytes) {
+        fail(new Error("Codex app-server WebSocket handshake exceeded 1 MiB."));
+        return;
+      }
+      const handshake = Buffer.concat(handshakeChunks, handshakeBytes);
+      handshakeChunks = [];
+      const rawHeaders = handshake.subarray(0, headerEnd - 4).toString("latin1");
+      const remainder = handshake.subarray(headerEnd);
       const result = validateWebSocketHandshake(rawHeaders, expectedAccept);
       if (result) {
         fail(result);
@@ -1060,10 +1149,8 @@ function openJsonTextWebSocket({ url, token, timeoutMs }) {
       settled = true;
       clearTimeout(timer);
       connection = createTextWebSocketConnection(socket);
-      frames = remainder;
-      drainWebSocketFrames(connection, frames, (nextFrames) => {
-        frames = nextFrames;
-      });
+      frameParser = createWebSocketFrameParser(connection);
+      frameParser.push(remainder);
       resolve(connection);
     });
   });
@@ -1088,57 +1175,192 @@ function createTextWebSocketConnection(socket) {
   return connection;
 }
 
-function drainWebSocketFrames(connection, buffer, replaceBuffer) {
-  let offset = 0;
-  while (buffer.length - offset >= 2) {
-    const first = buffer[offset];
-    const second = buffer[offset + 1];
-    const opcode = first & 0x0f;
-    const masked = (second & 0x80) !== 0;
-    let length = second & 0x7f;
-    let headerLength = 2;
-    if (length === 126) {
-      if (buffer.length - offset < 4) break;
-      length = buffer.readUInt16BE(offset + 2);
-      headerLength = 4;
-    } else if (length === 127) {
-      if (buffer.length - offset < 10) break;
-      const high = buffer.readUInt32BE(offset + 2);
-      const low = buffer.readUInt32BE(offset + 6);
-      if (high !== 0) {
+function createWebSocketFrameParser(connection) {
+  const queue = new BufferQueue();
+  let fragments = [];
+  let fragmentedOpcode;
+  let fragmentedBytes = 0;
+
+  const rejectOversized = () => {
+    fragments = [];
+    fragmentedOpcode = undefined;
+    fragmentedBytes = 0;
+    queue.clear();
+    connection.close();
+  };
+
+  const deliver = (opcode, payload) => {
+    if (opcode === 0x1) connection.onMessage?.(payload.toString("utf8"));
+  };
+
+  const push = (chunk) => {
+    if (chunk.length === 0) return;
+    queue.push(chunk);
+    while (queue.length >= 2) {
+      const first = queue.peekUInt8(0);
+      const second = queue.peekUInt8(1);
+      const final = (first & 0x80) !== 0;
+      const opcode = first & 0x0f;
+      const masked = (second & 0x80) !== 0;
+      let length = second & 0x7f;
+      let headerLength = 2;
+      if (length === 126) {
+        if (queue.length < 4) break;
+        length = queue.peekUInt16BE(2);
+        headerLength = 4;
+      } else if (length === 127) {
+        if (queue.length < 10) break;
+        const high = queue.peekUInt32BE(2);
+        const low = queue.peekUInt32BE(6);
+        if (high !== 0) {
+          rejectOversized();
+          return;
+        }
+        length = low;
+        headerLength = 10;
+      }
+      if (
+        length > websocketFrameLimitBytes ||
+        ((opcode & 0x08) !== 0 && (!final || length > 125))
+      ) {
+        rejectOversized();
+        return;
+      }
+      const maskLength = masked ? 4 : 0;
+      const frameLength = headerLength + maskLength + length;
+      if (queue.length < frameLength) break;
+
+      queue.discard(headerLength);
+      const mask = masked ? queue.read(4) : undefined;
+      let payload = queue.read(length);
+      if (masked) {
+        const unmasked = Buffer.alloc(payload.length);
+        for (let index = 0; index < payload.length; index += 1) {
+          unmasked[index] = payload[index] ^ mask[index % 4];
+        }
+        payload = unmasked;
+      }
+
+      if (opcode === 0x0) {
+        if (
+          fragmentedOpcode === undefined ||
+          fragmentedBytes + payload.length > websocketMessageLimitBytes
+        ) {
+          rejectOversized();
+          return;
+        }
+        fragments.push(payload);
+        fragmentedBytes += payload.length;
+        if (final) {
+          deliver(fragmentedOpcode, Buffer.concat(fragments, fragmentedBytes));
+          fragments = [];
+          fragmentedOpcode = undefined;
+          fragmentedBytes = 0;
+        }
+      } else if (opcode === 0x1 || opcode === 0x2) {
+        if (fragmentedOpcode !== undefined) {
+          rejectOversized();
+          return;
+        }
+        if (final) {
+          deliver(opcode, payload);
+        } else {
+          fragments = [payload];
+          fragmentedOpcode = opcode;
+          fragmentedBytes = payload.length;
+        }
+      } else if (opcode === 0x8) {
+        connection.onClose?.();
         connection.close();
-        return replaceBuffer(Buffer.alloc(0));
+        queue.clear();
+        return;
+      } else if (opcode === 0x9) {
+        connection.sendFrame(0xA, payload);
       }
-      length = low;
-      headerLength = 10;
     }
-    const maskLength = masked ? 4 : 0;
-    const frameLength = headerLength + maskLength + length;
-    if (buffer.length - offset < frameLength) break;
+  };
 
-    const payloadStart = offset + headerLength + maskLength;
-    let payload = buffer.subarray(payloadStart, payloadStart + length);
-    if (masked) {
-      const mask = buffer.subarray(offset + headerLength, offset + headerLength + 4);
-      const unmasked = Buffer.alloc(payload.length);
-      for (let index = 0; index < payload.length; index += 1) {
-        unmasked[index] = payload[index] ^ mask[index % 4];
-      }
-      payload = unmasked;
-    }
+  return { push };
+}
 
-    if (opcode === 0x1) {
-      connection.onMessage?.(payload.toString("utf8"));
-    } else if (opcode === 0x8) {
-      connection.onClose?.();
-      connection.close();
-      return replaceBuffer(Buffer.alloc(0));
-    } else if (opcode === 0x9) {
-      connection.sendFrame(0xA, payload);
-    }
-    offset += frameLength;
+class BufferQueue {
+  constructor() {
+    this.chunks = [];
+    this.headIndex = 0;
+    this.headOffset = 0;
+    this.length = 0;
   }
-  replaceBuffer(buffer.subarray(offset));
+
+  push(chunk) {
+    this.chunks.push(chunk);
+    this.length += chunk.length;
+  }
+
+  clear() {
+    this.chunks = [];
+    this.headIndex = 0;
+    this.headOffset = 0;
+    this.length = 0;
+  }
+
+  peekUInt8(index) {
+    let remaining = index + this.headOffset;
+    for (let chunkIndex = this.headIndex; chunkIndex < this.chunks.length; chunkIndex += 1) {
+      const chunk = this.chunks[chunkIndex];
+      if (remaining < chunk.length) return chunk[remaining];
+      remaining -= chunk.length;
+    }
+    throw new RangeError("WebSocket buffer underflow");
+  }
+
+  peekUInt16BE(index) {
+    return this.peekUInt8(index) * 0x100 + this.peekUInt8(index + 1);
+  }
+
+  peekUInt32BE(index) {
+    return (
+      this.peekUInt8(index) * 0x1000000 +
+      this.peekUInt8(index + 1) * 0x10000 +
+      this.peekUInt8(index + 2) * 0x100 +
+      this.peekUInt8(index + 3)
+    );
+  }
+
+  discard(length) {
+    let remaining = length;
+    while (remaining > 0) {
+      const available = this.chunks[this.headIndex].length - this.headOffset;
+      const consumed = Math.min(remaining, available);
+      this.headOffset += consumed;
+      this.length -= consumed;
+      remaining -= consumed;
+      if (this.headOffset === this.chunks[this.headIndex].length) {
+        this.headIndex += 1;
+        this.headOffset = 0;
+        if (this.headIndex === this.chunks.length) {
+          this.chunks = [];
+          this.headIndex = 0;
+        } else if (this.headIndex > 64 && this.headIndex * 2 > this.chunks.length) {
+          this.chunks = this.chunks.slice(this.headIndex);
+          this.headIndex = 0;
+        }
+      }
+    }
+  }
+
+  read(length) {
+    const output = Buffer.allocUnsafe(length);
+    let written = 0;
+    while (written < length) {
+      const chunk = this.chunks[this.headIndex];
+      const available = chunk.length - this.headOffset;
+      const copied = Math.min(length - written, available);
+      chunk.copy(output, written, this.headOffset, this.headOffset + copied);
+      written += copied;
+      this.discard(copied);
+    }
+    return output;
+  }
 }
 
 function encodeWebSocketFrame(opcode, payload) {
@@ -1237,13 +1459,35 @@ function mkdirSyncParent(path) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 }
 
-function migrateLegacyJson(path) {
-  if (!existsSync(path)) return [];
-  const contents = readFileSync(path, "utf8");
-  if (!contents.trimStart().startsWith("[")) return [];
-  const runs = JSON.parse(contents);
-  renameSync(path, `${path}.legacy-json`);
-  return Array.isArray(runs) ? runs : [];
+function stageLegacyJson(path) {
+  const candidates = [
+    path,
+    path.endsWith(".sqlite") ? path.replace(/\.sqlite$/, ".json") : undefined,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    const contents = readFileSync(candidate, "utf8");
+    if (!contents.trimStart().startsWith("[")) continue;
+    const runs = JSON.parse(contents);
+    const defaultBackup = `${candidate}.legacy-json`;
+    const backupPath = existsSync(defaultBackup)
+      ? `${defaultBackup}-${Date.now()}`
+      : defaultBackup;
+    renameSync(candidate, backupPath);
+    return {
+      runs: Array.isArray(runs) ? runs : [],
+      sourcePath: candidate,
+      backupPath,
+    };
+  }
+  return { runs: [], sourcePath: undefined, backupPath: undefined };
+}
+
+function restoreStagedLegacyJson(migration) {
+  if (!migration.sourcePath || !migration.backupPath) return;
+  if (existsSync(migration.backupPath) && !existsSync(migration.sourcePath)) {
+    renameSync(migration.backupPath, migration.sourcePath);
+  }
 }
 
 function copyArgsForRun(run) {

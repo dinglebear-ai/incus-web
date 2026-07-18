@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { ActorContext } from "@/lib/workspaces/types";
 
 export class AuthenticationRequiredError extends Error {
@@ -79,7 +81,7 @@ export function getActorFromHeaders(headers: Headers): ActorContext {
     displayName,
     requestId:
       firstHeader(headers, ["x-request-id", "x-correlation-id"]) ??
-      "local-dev",
+      `local-${randomUUID()}`,
     ipAddress: firstHeader(headers, ["x-forwarded-for"]),
     userAgent: firstHeader(headers, ["user-agent"]),
   };

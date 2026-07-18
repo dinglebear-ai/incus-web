@@ -46,6 +46,20 @@ describe("build worker contracts", () => {
     ]);
   });
 
+  it("keeps queue admission and log retention on bounded indexed paths", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const workerSource = readFileSync(join(here, "../../../../scripts/build-worker.mjs"), "utf8");
+
+    expect(workerSource).toContain("INCUS_WEB_BUILD_WORKER_MAX_QUEUED_BUILDS");
+    expect(workerSource).toMatch(/ON builds\(status, created_at\)/);
+    expect(workerSource).toContain(
+      'DELETE FROM build_logs WHERE build_id = ? AND offset < ?',
+    );
+    expect(workerSource).not.toContain(
+      'DELETE FROM build_logs WHERE rowid = ?',
+    );
+  });
+
   it("keeps the TS image alias predicate aligned with the worker", () => {
     expect(isBuildImageAlias("incus-web-abc_debian:trixie.1")).toBe(true);
     expect(isBuildImageAlias("-bad")).toBe(false);

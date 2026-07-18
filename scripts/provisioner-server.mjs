@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, realpath, stat, statfs, unlink } from "node:fs/promises";
-import { mkdirSync } from "node:fs";
+import { createReadStream, mkdirSync } from "node:fs";
+import { chmod, lstat, mkdir, open, readFile, realpath, stat, statfs, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -64,6 +64,12 @@ const maxIdempotencyRecords = Number.parseInt(
   process.env.INCUS_WEB_PROVISIONER_MAX_IDEMPOTENCY_RECORDS || "10000",
   10,
 );
+const readOnlyCommandTypes = new Set([
+  "GetWorkspaceStatus",
+  "ListWorkspaceSnapshots",
+  "ListAgentRuns",
+  "GetAgentRun",
+]);
 // The web app API route (apps/web/app/api/workspaces/[workspaceId]/golden-config/route.ts)
 // stages the uploaded zip here before sending ImportGoldenConfig -- both
 // processes need write/read access to this directory (see
@@ -95,7 +101,16 @@ const maxGoldenConfigDepth = Number.parseInt(
   process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_DEPTH || "20",
   10,
 );
+const maxGoldenConfigCentralDirectoryBytes = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_CENTRAL_DIRECTORY_BYTES || String(16 * 1024 * 1024),
+  10,
+);
+const maxConcurrentGoldenConfigImports = Number.parseInt(
+  process.env.INCUS_WEB_GOLDEN_CONFIG_MAX_CONCURRENT_IMPORTS || "2",
+  10,
+);
 let activeIncusCommands = 0;
+let activeGoldenConfigImports = 0;
 const statusCache = new Map();
 const statusInFlight = new Map();
 const agentRunConfig = agentRunConfigFromEnv();
@@ -320,31 +335,32 @@ function validatePayload(type, payload) {
       return hasOnlyKeys(payload, ["timeoutSeconds"]) && integerBetween(payload.timeoutSeconds, 1, 300) ? undefined : error("invalid_input", "RestartWorkspace payload is invalid");
     case "SetWorkspaceLimits": {
       const valid = hasOnlyKeys(payload, ["cpu", "memory"]) &&
-        (payload.cpu === undefined || (boundedString(payload.cpu, 1, 32) && /^\d+(?:\.\d+)?$/.test(payload.cpu) && Number(payload.cpu) > 0)) &&
-        (payload.memory === undefined || (boundedString(payload.memory, 1, 32) && /^\d+(?:\.\d+)?[KMGT]i?B$/i.test(payload.memory) && Number.parseFloat(payload.memory) > 0));
+        (payload.cpu === undefined || (typeof payload.cpu === "string" && /^\d+$/.test(payload.cpu) && Number(payload.cpu) > 0)) &&
+        (payload.memory === undefined || (typeof payload.memory === "string" && /^\d+(?:\.\d+)?[KMGT]?i?B$/i.test(payload.memory) && Number.parseFloat(payload.memory) > 0));
       return valid ? undefined : error("invalid_input", "SetWorkspaceLimits payload is invalid");
     }
     case "SetWorkspaceMount":
       return hasOnlyKeys(payload, ["hostPath"]) && boundedString(payload.hostPath, 1, 1024) && payload.hostPath.startsWith("/") && !payload.hostPath.includes("\0") ? undefined : error("invalid_input", "SetWorkspaceMount payload is invalid");
     case "CreateWorkspaceSnapshot":
-      return hasOnlyKeys(payload, ["name"]) && (payload.name === undefined || (boundedString(payload.name, 1, 63) && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(payload.name))) ? undefined : error("invalid_input", "CreateWorkspaceSnapshot payload is invalid");
+      return hasOnlyKeys(payload, ["name"]) && (payload.name === undefined || (boundedString(payload.name, 1, 63) && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(payload.name) && !payload.name.includes(".."))) ? undefined : error("invalid_input", "CreateWorkspaceSnapshot payload is invalid");
     case "ImportGoldenConfig":
-      return hasOnlyKeys(payload, ["sha256Hex"]) && typeof payload.sha256Hex === "string" && /^[a-f0-9]{64}$/.test(payload.sha256Hex) ? undefined : error("invalid_input", "ImportGoldenConfig payload is invalid");
+      return hasOnlyKeys(payload, ["sha256Hex"]) && typeof payload.sha256Hex === "string" && /^[a-f0-9]{64}$/i.test(payload.sha256Hex) ? undefined : error("invalid_input", "ImportGoldenConfig payload is invalid");
     case "ListAgentRuns":
       return hasOnlyKeys(payload, ["limit"]) && integerBetween(payload.limit, 1, 100) ? undefined : error("invalid_input", "ListAgentRuns payload is invalid");
     case "GetAgentRun":
       return hasOnlyKeys(payload, ["runId"]) && typeof payload.runId === "string" && /^run_\d{14}_[a-z0-9]+$/.test(payload.runId) ? undefined : error("invalid_input", "GetAgentRun payload is invalid");
     case "DispatchAgentRun": {
       const valid = hasOnlyKeys(payload, ["agent", "repoUrl", "ref", "task"]) && ["codex", "claude"].includes(payload.agent) &&
-        boundedString(payload.repoUrl, 1, 512) && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(payload.repoUrl) &&
-        boundedString(payload.task, 1, 12000) && (payload.ref === undefined || (boundedString(payload.ref, 1, 200) && /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/.test(payload.ref) && !payload.ref.includes("..")));
+        isAllowedAgentRepo(payload.repoUrl) &&
+        boundedString(payload.task, 1, 12000) && payload.task.trim().length > 0 &&
+        (payload.ref === undefined || (boundedString(payload.ref, 1, 200) && /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/.test(payload.ref) && !payload.ref.includes("..") && !payload.ref.includes("//") && !payload.ref.endsWith("/")));
       return valid ? undefined : error("invalid_input", "DispatchAgentRun payload is invalid");
     }
     case "RunSetup": {
       const age = payload.ageKey;
-      const validAge = age === undefined || (isPlainObject(age) && hasOnlyKeys(age, ["value", "persistEncrypted"]) && boundedString(age.value, 1, 200000) && typeof age.persistEncrypted === "boolean");
+      const validAge = age === undefined || (isPlainObject(age) && hasOnlyKeys(age, ["value", "persistEncrypted"]) && boundedString(age.value, 1, 200000) && isAgeIdentity(age.value) && age.persistEncrypted === false);
       return hasOnlyKeys(payload, ["dotfilesRepo", "ageKey", "skipAptScripts"]) && typeof payload.skipAptScripts === "boolean" &&
-        (payload.dotfilesRepo === undefined || boundedString(payload.dotfilesRepo, 1, 512)) && validAge ? undefined : error("invalid_input", "RunSetup payload is invalid");
+        (payload.dotfilesRepo === undefined || (boundedString(payload.dotfilesRepo, 1, 512) && isAllowedGithubHttpsRepo(payload.dotfilesRepo))) && validAge ? undefined : error("invalid_input", "RunSetup payload is invalid");
     }
     default:
       return error("invalid_input", "unsupported provisioner command");
@@ -357,8 +373,27 @@ function boundedString(value, min, max) { return typeof value === "string" && va
 function integerBetween(value, min, max) { return Number.isInteger(value) && value >= min && value <= max; }
 function validProject(value) { return typeof value === "string" && (value === "default" || /^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,61}[A-Za-z0-9])?$/.test(value)); }
 function validContainer(value) { return typeof value === "string" && (value === "incus-web" || /^ws-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value)); }
+function isAllowedGithubHttpsRepo(value) {
+  const match = value.match(/^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/);
+  return Boolean(match && match[2].length <= 100 && /^[A-Za-z0-9_.-]*[A-Za-z0-9]$/.test(match[2]) && !match[2].includes(".."));
+}
+function isAllowedAgentRepo(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512 || /[\s\r\n]/.test(value)) return false;
+  if (value.startsWith("https://") || value.startsWith("ssh://")) {
+    try {
+      const url = new URL(value);
+      return Boolean(url.hostname && url.pathname.length > 1);
+    } catch {
+      return false;
+    }
+  }
+  return /^git@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+(?:\.git)?$/.test(value);
+}
+function isAgeIdentity(value) {
+  return value.split(/\r?\n/).some((line) => /^AGE-SECRET-KEY-[A-Z0-9-]+$/i.test(line.trim()));
+}
 
-function run(command, args, { signal, input } = {}) {
+function run(command, args, { signal, input, inputPath } = {}) {
   return new Promise((resolve, reject) => {
     let releaseSlot;
     try {
@@ -369,10 +404,12 @@ function run(command, args, { signal, input } = {}) {
     }
     let settled = false;
     let outputBytes = 0;
+    let timer;
     const child = spawn(command, args, {
       detached: true,
-      stdio: [input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+      stdio: [input !== undefined || inputPath ? "pipe" : "ignore", "pipe", "pipe"],
     });
+    let inputStream;
     if (input !== undefined) {
       child.stdin.write(input);
       child.stdin.end();
@@ -384,6 +421,7 @@ function run(command, args, { signal, input } = {}) {
       settled = true;
       clearTimeout(timer);
       if (signal) signal.removeEventListener("abort", abort);
+      inputStream?.destroy();
       if (releaseSlot) releaseSlot();
       if (err) reject(err);
       else resolve(value);
@@ -394,6 +432,12 @@ function run(command, args, { signal, input } = {}) {
       finish(new Error(reason));
     };
     const abort = () => terminate(`${command} aborted`);
+    if (inputPath) {
+      inputStream = createReadStream(inputPath);
+      inputStream.once("error", (error) => terminate(`${command} input failed: ${error.message}`));
+      child.stdin.once("error", (error) => terminate(`${command} input pipe failed: ${error.message}`));
+      inputStream.pipe(child.stdin);
+    }
     const append = (target) => (data) => {
       outputBytes += data.length;
       if (outputBytes > maxProcessOutputBytes) {
@@ -406,7 +450,7 @@ function run(command, args, { signal, input } = {}) {
     };
     child.stdout.on("data", append("stdout"));
     child.stderr.on("data", append("stderr"));
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       terminate(`${command} timed out`);
     }, commandTimeoutMs);
     timer.unref();
@@ -501,6 +545,23 @@ async function pushContainerFile(container, project, path, content, options) {
       "--create-dirs",
     ],
     { ...options, input: content },
+  );
+}
+
+async function pushContainerFileFromPath(container, project, path, sourcePath, options) {
+  return agentIncus(
+    [
+      "--project",
+      project,
+      "file",
+      "push",
+      "-",
+      `${container}${path}`,
+      "--mode",
+      "0600",
+      "--create-dirs",
+    ],
+    { ...options, inputPath: sourcePath },
   );
 }
 
@@ -953,12 +1014,14 @@ function goldenConfigFailure(message) {
   return Object.assign(new Error(message), { code: "golden_config_failed" });
 }
 
-// The staged path is derived entirely from the workspace tuple already
-// validated by validateWorkspace() above -- the command payload only ever
-// carries a content hash, never a path, so this can't be pointed at an
-// arbitrary host file.
+// The staged path is content-addressed by the validated workspace tuple and
+// declared hash. Concurrent imports for one workspace therefore never replace
+// or unlink each other's archive, while callers still cannot supply a path.
 function stagedGoldenConfigPath(command) {
-  return join(goldenConfigDir, `${command.workspace.id}.zip`);
+  return join(
+    goldenConfigDir,
+    `${command.workspace.id}-${command.payload.sha256Hex.toLowerCase()}.zip`,
+  );
 }
 
 const GOLDEN_CONFIG_CONTAINER_ZIP_PATH = "/tmp/incus-web-golden-config.zip";
@@ -1040,22 +1103,27 @@ async function importGoldenConfig(command, options) {
       code: "invalid_input",
     });
   }
+  if (activeGoldenConfigImports >= maxConcurrentGoldenConfigImports) {
+    throw Object.assign(new Error("too many golden config imports are active"), {
+      code: "timeout",
+    });
+  }
+  activeGoldenConfigImports += 1;
 
   try {
-    const content = await readFile(stagedPath);
-    const actualHash = createHash("sha256").update(content).digest("hex");
+    const actualHash = await sha256File(stagedPath);
     if (actualHash !== command.payload.sha256Hex.toLowerCase()) {
       throw Object.assign(
         new Error("staged golden config content did not match the declared sha256Hex"),
         { code: "invalid_input" },
       );
     }
-    await preflightGoldenConfigArchive(content, stagedPath);
-    await pushContainerFile(
+    await preflightGoldenConfigArchive(stagedPath, stagedStat.size);
+    await pushContainerFileFromPath(
       incusContainer,
       incusProject,
       GOLDEN_CONFIG_CONTAINER_ZIP_PATH,
-      content,
+      stagedPath,
       options,
     );
     let stdout;
@@ -1085,24 +1153,52 @@ async function importGoldenConfig(command, options) {
       warnings: parseGoldenConfigWarnings(manifestJson),
     };
   } finally {
+    activeGoldenConfigImports -= 1;
     await unlink(stagedPath).catch(() => {});
   }
 }
 
-async function preflightGoldenConfigArchive(content, stagedPath) {
-  const eocd = findZipEocd(content);
-  if (eocd < 0 || content.readUInt32LE(eocd) !== 0x06054b50) {
-    throw Object.assign(new Error("staged golden config is not a valid ZIP archive"), { code: "invalid_input" });
+async function sha256File(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+async function preflightGoldenConfigArchive(stagedPath, archiveSize) {
+  const file = await open(stagedPath, "r");
+  let content;
+  let entryCount;
+  try {
+    const tailLength = Math.min(archiveSize, 65557);
+    const tail = Buffer.alloc(tailLength);
+    await file.read(tail, 0, tailLength, archiveSize - tailLength);
+    const tailEocd = findZipEocd(tail);
+    if (tailEocd < 0 || tail.readUInt32LE(tailEocd) !== 0x06054b50) {
+      throw Object.assign(new Error("staged golden config is not a valid ZIP archive"), { code: "invalid_input" });
+    }
+    entryCount = tail.readUInt16LE(tailEocd + 10);
+    const centralSize = tail.readUInt32LE(tailEocd + 12);
+    const centralOffset = tail.readUInt32LE(tailEocd + 16);
+    const absoluteEocd = archiveSize - tailLength + tailEocd;
+    if (
+      entryCount > maxGoldenConfigEntries ||
+      centralSize > maxGoldenConfigCentralDirectoryBytes ||
+      centralOffset + centralSize > absoluteEocd
+    ) {
+      throw Object.assign(new Error("golden config ZIP exceeds entry limits or has an invalid directory"), { code: "invalid_input" });
+    }
+    content = Buffer.alloc(centralSize);
+    const { bytesRead } = await file.read(content, 0, centralSize, centralOffset);
+    if (bytesRead !== centralSize) {
+      throw Object.assign(new Error("golden config ZIP central directory is truncated"), { code: "invalid_input" });
+    }
+  } finally {
+    await file.close();
   }
-  const entryCount = content.readUInt16LE(eocd + 10);
-  const centralSize = content.readUInt32LE(eocd + 12);
-  let offset = content.readUInt32LE(eocd + 16);
-  if (entryCount > maxGoldenConfigEntries || offset + centralSize > eocd) {
-    throw Object.assign(new Error("golden config ZIP exceeds entry limits or has an invalid directory"), { code: "invalid_input" });
-  }
+  let offset = 0;
   let expandedBytes = 0;
   for (let index = 0; index < entryCount; index += 1) {
-    if (offset + 46 > eocd || content.readUInt32LE(offset) !== 0x02014b50) {
+    if (offset + 46 > content.length || content.readUInt32LE(offset) !== 0x02014b50) {
       throw Object.assign(new Error("golden config ZIP central directory is invalid"), { code: "invalid_input" });
     }
     const compressed = content.readUInt32LE(offset + 20);
@@ -1111,7 +1207,7 @@ async function preflightGoldenConfigArchive(content, stagedPath) {
     const extraLength = content.readUInt16LE(offset + 30);
     const commentLength = content.readUInt16LE(offset + 32);
     const externalAttributes = content.readUInt32LE(offset + 38);
-    if (offset + 46 + nameLength + extraLength + commentLength > eocd) {
+    if (offset + 46 + nameLength + extraLength + commentLength > content.length) {
       throw Object.assign(new Error("golden config ZIP central directory is truncated"), { code: "invalid_input" });
     }
     const name = content.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
@@ -1232,6 +1328,9 @@ export async function handleCommand(command, options = {}) {
   const mismatch = validateWorkspace(command);
   if (mismatch) {
     return operation(command, "failed", mismatch);
+  }
+  if (readOnlyCommandTypes.has(command.type)) {
+    return executeCommand(command, options);
   }
   const db = options.idempotencyDb || getIdempotencyDb();
   const scopeKey = `${command.actor.userId}\0${command.workspace.id}\0${command.requestId}`;

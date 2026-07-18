@@ -134,6 +134,10 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
     };
   }
 
+  function stagedPathForHash(sha256Hex: string) {
+    return join(goldenConfigDir, `${workspace.id}-${sha256Hex.toLowerCase()}.zip`);
+  }
+
   it("rejects a malformed sha256Hex with invalid_input, proving the server re-validates independently of the web app's own validation", async () => {
     const response = await postOperations(
       socketPath,
@@ -162,10 +166,9 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
   });
 
   it("rejects an import when the staged file's content does not match the declared hash", async () => {
-    const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
-    await writeFile(stagedPath, Buffer.from("not actually a zip"));
-
     const wrongHash = "1".repeat(64);
+    const stagedPath = stagedPathForHash(wrongHash);
+    await writeFile(stagedPath, Buffer.from("not actually a zip"));
     const response = await postOperations(
       socketPath,
       baseCommand("req-3", { sha256Hex: wrongHash }),
@@ -180,10 +183,10 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
   });
 
   it("proceeds past hash verification and attempts a real `incus file push` for a correctly-hashed staged file, instead of silently no-op'ing", async () => {
-    const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
     const content = centralDirectoryZip([{ name: "claude/settings.json", compressed: 10, expanded: 10 }]);
-    await writeFile(stagedPath, content);
     const sha256Hex = createHash("sha256").update(content).digest("hex");
+    const stagedPath = stagedPathForHash(sha256Hex);
+    await writeFile(stagedPath, content);
 
     const response = await postOperations(socketPath, baseCommand("req-4", { sha256Hex }));
 
@@ -193,6 +196,24 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
     // hash verification rejected it -- a code path that quietly stopped
     // calling incus at all would still return "failed", but with error.code
     // "invalid_input", not this.
+    expect(response.body).toMatchObject({
+      status: "failed",
+      error: { code: "incus_unavailable" },
+    });
+    await expect(access(stagedPath)).rejects.toThrow();
+  });
+
+  it("accepts the contract's case-insensitive sha256Hex and resolves its lowercase content address", async () => {
+    const content = centralDirectoryZip([{ name: "claude/settings.json", compressed: 10, expanded: 10 }]);
+    const sha256Hex = createHash("sha256").update(content).digest("hex");
+    const stagedPath = stagedPathForHash(sha256Hex);
+    await writeFile(stagedPath, content);
+
+    const response = await postOperations(
+      socketPath,
+      baseCommand("req-uppercase", { sha256Hex: sha256Hex.toUpperCase() }),
+    );
+
     expect(response.body).toMatchObject({
       status: "failed",
       error: { code: "incus_unavailable" },
@@ -213,14 +234,90 @@ describe("provisioner-server ImportGoldenConfig (integration)", () => {
       ]),
     ];
     for (const [index, content] of cases.entries()) {
-      const stagedPath = join(goldenConfigDir, `${workspace.id}.zip`);
-      await writeFile(stagedPath, content);
       const sha256Hex = createHash("sha256").update(content).digest("hex");
+      const stagedPath = stagedPathForHash(sha256Hex);
+      await writeFile(stagedPath, content);
       const response = await postOperations(socketPath, baseCommand(`unsafe-${index}`, { sha256Hex }));
       expect(response.body).toMatchObject({ status: "failed", error: { code: "invalid_input" } });
       await expect(access(stagedPath)).rejects.toThrow();
     }
   }, 15_000);
+
+  it("bounds concurrent imports while streaming staged archives to Incus", async () => {
+    const isolated = await mkdtemp(join(tmpdir(), "incus-web-golden-concurrency-"));
+    const isolatedGolden = join(isolated, "golden-config");
+    const bin = join(isolated, "bin");
+    const isolatedSocket = join(isolated, "provisioner.sock");
+    await mkdir(isolatedGolden, { recursive: true });
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "incus"),
+      `#!/bin/sh
+set -eu
+case " $* " in
+  *" file push "*) cat >/dev/null; sleep 0.5 ;;
+  *" exec "*) printf '0___INCUS_WEB_GOLDEN_CONFIG_MANIFEST___{}' ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const isolatedChild = spawn(
+      process.execPath,
+      [join(currentDir, "../../../../scripts/provisioner-server.mjs")],
+      {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          INCUS_WEB_PROVISIONER_TOKEN: TOKEN,
+          INCUS_WEB_PROVISIONER_SOCKET: isolatedSocket,
+          INCUS_WEB_PROVISIONER_HOST: "",
+          INCUS_WEB_PROVISIONER_PORT: "0",
+          INCUS_WEB_PROVISIONER_STATE_DB: join(isolated, "provisioner.sqlite"),
+          INCUS_WEB_AGENT_RUN_STORE_PATH: join(isolated, "agent-runs.sqlite"),
+          INCUS_WEB_GOLDEN_CONFIG_DIR: isolatedGolden,
+          INCUS_WEB_GOLDEN_CONFIG_MAX_CONCURRENT_IMPORTS: "1",
+          INCUS_WEB_INCUS_CONTAINER: nonexistentContainer,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      await waitForSocket(isolatedSocket);
+      const contents = [
+        centralDirectoryZip([{ name: "claude/first.json", compressed: 1, expanded: 1 }]),
+        centralDirectoryZip([{ name: "claude/second.json", compressed: 1, expanded: 1 }]),
+      ];
+      const hashes = contents.map((content) => createHash("sha256").update(content).digest("hex"));
+      await Promise.all(
+        contents.map((content, index) =>
+          writeFile(join(isolatedGolden, `${workspace.id}-${hashes[index]}.zip`), content),
+        ),
+      );
+
+      const responses = await Promise.all(
+        hashes.map((sha256Hex, index) =>
+          postOperations(isolatedSocket, baseCommand(`concurrent-${index}`, { sha256Hex })),
+        ),
+      );
+      expect(
+        responses.filter((response) => (response.body as { status?: string }).status === "succeeded"),
+        JSON.stringify(responses),
+      )
+        .toHaveLength(1);
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({ code: "timeout" }),
+          }),
+        }),
+      );
+    } finally {
+      isolatedChild.kill();
+      await rm(isolated, { recursive: true, force: true });
+    }
+  });
 });
 
 function centralDirectoryZip(

@@ -8,7 +8,16 @@ export async function GET() {
   const provisioner = await provisionerReadiness();
   const ok = stateStore.ok && provisioner.ok;
   return Response.json(
-    { ok, dependencies: { stateStore, provisioner } },
+    {
+      ok,
+      dependencies: {
+        stateStore: { ok: stateStore.ok },
+        provisioner: {
+          ok: provisioner.ok,
+          configured: provisioner.configured,
+        },
+      },
+    },
     { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } },
   );
 }

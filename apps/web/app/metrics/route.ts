@@ -4,10 +4,8 @@ import { workspaceStateStoreStatus } from "@/lib/workspaces/state-store";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const [state, provisioner] = await Promise.all([
-    Promise.resolve(workspaceStateStoreStatus()),
-    provisionerReadiness(),
-  ]);
+  const state = workspaceStateStoreStatus();
+  const provisioner = await provisionerReadiness();
   const ready = state.ok && provisioner.ok;
   const lines = [
     "# HELP incus_web_ready Whether the complete control plane is ready.",

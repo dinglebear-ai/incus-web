@@ -109,7 +109,7 @@ incus-web uses environment variables for configuration. Secrets are stored in `.
 **Agent runs:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INCUS_WEB_AGENT_RUN_STORE_PATH` | `/var/lib/incus-web/agent-runs.json` | Run store path |
+| `INCUS_WEB_AGENT_RUN_STORE_PATH` | `/var/lib/incus-web/agent-runs.sqlite` | Durable SQLite run store path |
 | `INCUS_WEB_AGENT_RUNS_INSTALL_PATH` | `/usr/local/lib/incus-web/agent-runs.mjs` | Install path |
 | `INCUS_WEB_AGENT_GOLDEN_CONTAINER` | `incus-web-agent-golden` | Golden container name |
 | `INCUS_WEB_AGENT_GOLDEN_PROJECT` | `$INCUS_WEB_INCUS_PROJECT` | Golden project |

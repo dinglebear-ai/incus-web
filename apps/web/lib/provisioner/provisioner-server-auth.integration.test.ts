@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { validateProvisionerCommand } from "./contracts";
+
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 // Integration test for the requireServiceAuth backport in
@@ -92,6 +94,7 @@ describe("provisioner-server requireServiceAuth (integration)", () => {
           INCUS_WEB_PROVISIONER_PORT: "0",
           INCUS_WEB_PROVISIONER_STATE_DB: join(tempDir, "provisioner.sqlite"),
           INCUS_WEB_AGENT_RUN_STORE_PATH: join(tempDir, "agent-runs.sqlite"),
+          INCUS_WEB_CODEX_APP_SERVER_URL: "",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -150,20 +153,94 @@ describe("provisioner-server requireServiceAuth (integration)", () => {
     }
   });
 
-  it("durably replays a request id and rejects changed-payload reuse", async () => {
-    const command = validCommand("ListAgentRuns", { limit: 20 }, "durable-replay");
+  it("executes read-only requests fresh even when a request id is reused", async () => {
+    const command = validCommand("ListAgentRuns", { limit: 20 }, "fresh-read");
+    const first = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
+    const changed = await postOperations(socketPath, `Bearer ${TOKEN}`, {
+      ...command,
+      payload: { limit: 21 },
+    });
+    expect(first.body).toMatchObject({ status: "succeeded" });
+    expect(changed.body).toMatchObject({ status: "succeeded" });
+  });
+
+  it("durably replays mutation request ids and rejects changed reuse", async () => {
+    const command = validCommand(
+      "StopWorkspace",
+      { force: false, timeoutSeconds: 1 },
+      "durable-mutation",
+    );
     const first = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
     const replay = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
     expect(replay.body).toEqual(first.body);
 
     const changed = await postOperations(socketPath, `Bearer ${TOKEN}`, {
       ...command,
-      payload: { limit: 21 },
+      payload: { force: true, timeoutSeconds: 1 },
     });
     expect(changed.body).toMatchObject({
       status: "failed",
       error: { code: "invalid_input" },
     });
+  });
+
+  it("keeps host payload rejection rules aligned with the executable TypeScript contract", async () => {
+    const cases = [
+      validCommand("DispatchAgentRun", {
+        agent: "codex",
+        repoUrl: "https://github.com/example/repo",
+        ref: "feature//nested",
+        task: "test",
+      }, "parity-ref-double-slash"),
+      validCommand("DispatchAgentRun", {
+        agent: "codex",
+        repoUrl: "https://github.com/example/repo",
+        ref: "feature/",
+        task: "test",
+      }, "parity-ref-trailing-slash"),
+      validCommand("SetWorkspaceLimits", { cpu: "1.5" }, "parity-fractional-cpu"),
+      validCommand("CreateWorkspaceSnapshot", { name: "bad..snapshot" }, "parity-snapshot-name"),
+      validCommand("RunSetup", {
+        dotfilesRepo: "https://example.com/not-github/repo",
+        skipAptScripts: true,
+      }, "parity-dotfiles-repo"),
+      validCommand("RunSetup", {
+        ageKey: { value: "not an age identity", persistEncrypted: false },
+        skipAptScripts: true,
+      }, "parity-age-identity"),
+      validCommand("RunSetup", {
+        ageKey: { value: "AGE-SECRET-KEY-TEST", persistEncrypted: true },
+        skipAptScripts: true,
+      }, "parity-age-persistence-policy"),
+    ];
+
+    for (const command of cases) {
+      expect(validateProvisionerCommand(command).ok).toBe(false);
+      const response = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
+      expect(response.body).toMatchObject({ status: "failed", error: { code: "invalid_input" } });
+    }
+  });
+
+  it("accepts the same safe repository and setup shapes as the TypeScript contract", async () => {
+    const commands = [
+      validCommand("DispatchAgentRun", {
+        agent: "codex",
+        repoUrl: "ssh://git@example.com/example/repo",
+        ref: "feature/nested",
+        task: "test",
+      }, "parity-valid-ssh-repo"),
+      validCommand("RunSetup", {
+        dotfilesRepo: "https://github.com/example/repo.git",
+        ageKey: { value: "AGE-SECRET-KEY-TEST", persistEncrypted: false },
+        skipAptScripts: true,
+      }, "parity-valid-setup"),
+    ];
+
+    for (const command of commands) {
+      expect(validateProvisionerCommand(command).ok).toBe(true);
+      const response = await postOperations(socketPath, `Bearer ${TOKEN}`, command);
+      expect(response.body).not.toMatchObject({ error: { code: "invalid_input" } });
+    }
   });
 });
 

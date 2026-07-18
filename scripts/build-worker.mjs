@@ -36,6 +36,10 @@ const maxCompletedBuilds = Number.parseInt(
   process.env.INCUS_WEB_BUILD_WORKER_MAX_COMPLETED_BUILDS || "100",
   10,
 );
+const maxQueuedBuilds = Number.parseInt(
+  process.env.INCUS_WEB_BUILD_WORKER_MAX_QUEUED_BUILDS || "100",
+  10,
+);
 const maxStderrTailBytes = Number.parseInt(
   process.env.INCUS_WEB_BUILD_WORKER_MAX_STDERR_TAIL_BYTES || String(64 * 1024),
   10,
@@ -94,6 +98,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS build_logs_build_id_offset_idx
     ON build_logs(build_id, offset);
+  CREATE INDEX IF NOT EXISTS builds_status_created_at_idx
+    ON builds(status, created_at);
   CREATE TABLE IF NOT EXISTS image_registry (
     image_alias TEXT PRIMARY KEY,
     owner_user_id TEXT NOT NULL,
@@ -222,21 +228,27 @@ async function dispatchBuild(command) {
 
   const buildId = `build_${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}_${randomUUID().slice(0, 8)}`;
   const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO builds
-      (id, owner_user_id, idempotency_key, status, image_alias, distro, release, based_on, definition_yaml, created_at)
-      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    buildId,
-    command.actor.userId,
-    command.payload.idempotencyKey,
-    command.payload.imageAlias,
-    command.payload.distro,
-    command.payload.release,
-    command.payload.basedOn || null,
-    command.payload.definitionYaml,
-    now,
-  );
+  runTransaction(() => {
+    const queued = Number(db.prepare("SELECT COUNT(*) AS count FROM builds WHERE status = 'queued'").get().count);
+    if (Number.isFinite(maxQueuedBuilds) && maxQueuedBuilds > 0 && queued >= maxQueuedBuilds) {
+      throw Object.assign(new Error("build queue is full"), { code: "queue_full" });
+    }
+    db.prepare(
+      `INSERT INTO builds
+        (id, owner_user_id, idempotency_key, status, image_alias, distro, release, based_on, definition_yaml, created_at)
+        VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      buildId,
+      command.actor.userId,
+      command.payload.idempotencyKey,
+      command.payload.imageAlias,
+      command.payload.distro,
+      command.payload.release,
+      command.payload.basedOn || null,
+      command.payload.definitionYaml,
+      now,
+    );
+  });
 
   processNextBuild();
 
@@ -497,27 +509,23 @@ function readLogSince(buildId, since) {
 }
 
 function pruneBuildLogs(buildId) {
-  const build = db.prepare("SELECT log_bytes FROM builds WHERE id = ?").get(buildId);
+  const build = db.prepare("SELECT log_bytes, log_next_offset FROM builds WHERE id = ?").get(buildId);
   if (!build || Number(build.log_bytes) <= maxLogBytesPerBuild) return;
-  const rows = db
-    .prepare("SELECT rowid, offset, chunk FROM build_logs WHERE build_id = ? ORDER BY offset ASC")
-    .all(buildId);
-  let total = Number(build.log_bytes);
-  let removed = 0;
-  for (const row of rows) {
-    if (total <= maxLogBytesPerBuild) break;
-    db.prepare("DELETE FROM build_logs WHERE rowid = ?").run(row.rowid);
-    total -= byteLength(String(row.chunk));
-    removed += 1;
-  }
-  db.prepare("UPDATE builds SET log_bytes = ? WHERE id = ?").run(total, buildId);
-  if (removed > 0) {
-    const first = db
-      .prepare("SELECT offset FROM build_logs WHERE build_id = ? ORDER BY offset ASC LIMIT 1")
-      .get(buildId);
-    if (first && !hasTruncationMarker(buildId)) {
+  const nextOffset = Number(build.log_next_offset);
+  const targetOffset = Math.max(0, nextOffset - maxLogBytesPerBuild);
+  const firstRetained = db.prepare(
+    `SELECT offset FROM build_logs
+     WHERE build_id = ? AND offset >= ? AND chunk NOT LIKE '[log truncated%'
+     ORDER BY offset ASC LIMIT 1`,
+  ).get(buildId, targetOffset);
+  const cutoff = firstRetained ? Number(firstRetained.offset) : nextOffset;
+  const total = Math.max(0, nextOffset - cutoff);
+  runTransaction(() => {
+    const removed = db.prepare("DELETE FROM build_logs WHERE build_id = ? AND offset < ?").run(buildId, cutoff);
+    db.prepare("UPDATE builds SET log_bytes = ? WHERE id = ?").run(total, buildId);
+    if (removed.changes > 0 && firstRetained) {
       const marker = `[log truncated to last ${maxLogBytesPerBuild} bytes]\n`;
-      const markerOffset = Math.max(0, Number(first.offset) - byteLength(marker));
+      const markerOffset = Math.max(0, cutoff - byteLength(marker));
       db.prepare("INSERT INTO build_logs (build_id, offset, chunk, created_at) VALUES (?, ?, ?, ?)").run(
         buildId,
         markerOffset,
@@ -525,7 +533,7 @@ function pruneBuildLogs(buildId) {
         new Date().toISOString(),
       );
     }
-  }
+  });
 }
 
 function recoverInterruptedBuilds() {
@@ -538,14 +546,6 @@ function recoverInterruptedBuilds() {
     });
     appendLog(row.id, "build failed: build worker restarted before completion\n");
   }
-}
-
-function hasTruncationMarker(buildId) {
-  return Boolean(
-    db
-      .prepare("SELECT 1 FROM build_logs WHERE build_id = ? AND chunk LIKE '[log truncated%' LIMIT 1")
-      .get(buildId),
-  );
 }
 
 function pruneCompletedBuilds() {

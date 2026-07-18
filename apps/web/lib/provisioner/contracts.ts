@@ -231,8 +231,8 @@ export type WorkspaceSnapshot = {
 
 // The zip itself is staged to disk by the API route (see
 // apps/web/app/api/workspaces/[workspaceId]/golden-config/route.ts) at a
-// path the host provisioner derives from the already-authenticated
-// workspace tuple -- the payload never carries a path, only a content hash,
+// content-addressed path the host provisioner derives from the already-
+// authenticated workspace tuple and hash -- the payload never carries a path,
 // so a caller can't use this command to make the provisioner read an
 // arbitrary host file.
 export type ImportGoldenConfigPayload = {

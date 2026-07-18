@@ -138,7 +138,7 @@ See `.env.example` for complete reference. Key variables:
 - `INCUS_WEB_INCUS_CONTAINER=$CONTAINER_NAME`
 
 **Agent runs:**
-- `INCUS_WEB_AGENT_RUN_STORE_PATH=/var/lib/incus-web/agent-runs.json`
+- `INCUS_WEB_AGENT_RUN_STORE_PATH=/var/lib/incus-web/agent-runs.sqlite`
 - `INCUS_WEB_AGENT_GOLDEN_CONTAINER=incus-web-agent-golden`
 - `INCUS_WEB_AGENT_CREDENTIAL_SOURCE_CONTAINER=$CONTAINER_NAME`
 - `INCUS_WEB_CODEX_APP_SERVER_URL` - Codex app-server endpoint

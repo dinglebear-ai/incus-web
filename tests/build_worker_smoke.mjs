@@ -38,6 +38,7 @@ try {
       INCUS_WEB_BUILD_WORKER_WORK_DIR: join(state, "work"),
       DISTROBUILDER_BIN: join(bin, "distrobuilder"),
       INCUS_WEB_TEST_DISTRO_LOCK: join(temp, "distrobuilder.lock"),
+      INCUS_WEB_BUILD_WORKER_MAX_QUEUED_BUILDS: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -96,8 +97,17 @@ try {
   assert.equal(first.status, 200);
   assert.equal(first.body.result.buildId, replay.body.result.buildId, "idempotent dispatch must reuse the build");
 
+  await waitFor(async () => {
+    const status = await buildStatus(first.body.result.buildId, 0);
+    if (status.body.result?.status !== "running") throw new Error("first build is not running");
+    return status;
+  });
+
   const second = await dispatch("req-build-2", "idem-build-2", "test-image-2");
   assert.equal(second.status, 200);
+  const overflow = await dispatch("req-build-3", "idem-build-3", "test-image-3");
+  assert.equal(overflow.body.status, "failed");
+  assert.equal(overflow.body.error.code, "queue_full");
   await waitFor(async () => {
     const status = await buildStatus(second.body.result.buildId, 0);
     if (status.body.result?.status !== "succeeded") throw new Error("second build is not complete");

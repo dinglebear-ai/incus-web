@@ -390,37 +390,18 @@ Claude CLI runs interactively, so timeout is managed by shell process lifetime.
 
 ## Store
 
-Agent runs are stored in JSON file:
-```javascript
-// /var/lib/incus-web/agent-runs.json
-[
-  {
-    "id": "run-abc123",
-    "workspaceId": "workspace-incus-web",
-    "agent": "codex",
-    "task": "Fix the authentication bug",
-    "repositoryUrl": "https://github.com/user/repo",
-    "status": "succeeded",
-    "phase": "succeeded",
-    "container": {
-      "name": "run-abc123",
-      "state": "deleted"
-    },
-    "controller": {
-      "kind": "codex-app-server",
-      "agentRunId": "codex-run-xyz"
-    },
-    "createdAt": "2026-07-03T10:00:00Z",
-    "updatedAt": "2026-07-03T12:00:00Z",
-    "completedAt": "2026-07-03T12:00:00Z"
-  }
-]
+Agent runs are stored in a WAL-enabled SQLite database:
+```text
+/var/lib/incus-web/agent-runs.sqlite
+
+agent_runs      durable run metadata and bounded terminal history
+agent_run_logs  indexed, bounded per-run log entries with cascade cleanup
 ```
 
 Store operations:
 ```javascript
 await store.list(workspaceId, limit = 20)
-await store.insert(run)
+await store.insert(run, { maxActive })
 await store.update(runId, patch)
 ```
 
