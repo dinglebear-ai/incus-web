@@ -111,7 +111,9 @@ jobs:
           sudo incus admin init --minimal || true
 
       - name: Build and export image
-        run: sudo -E ./scripts/build-image.sh
+        run: |
+          sudo -E ./scripts/build-image.sh
+          sudo chown -R "$(id -u):$(id -g)" "$EXPORT_DIR"
         env:
           EXPORT_DIR: ${{ github.workspace }}/dist
           IMAGE_ALIAS: incus-web-agent

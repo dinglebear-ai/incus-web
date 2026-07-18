@@ -620,6 +620,7 @@ for needle in \
   "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" \
   "retention-days: 14" \
   "Publish immutable image release" \
+  'sudo chown -R "$(id -u):$(id -g)" "$EXPORT_DIR"' \
   'RELEASE_TAG: incus-web-agent-${{ github.sha }}' \
   "git tag -f incus-web-agent-latest \"\$GITHUB_SHA\"" \
   "git push -f origin incus-web-agent-latest" \
