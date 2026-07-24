@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, mkdirSync } from "node:fs";
+import { createReadStream, mkdirSync, realpathSync } from "node:fs";
 import { chmod, lstat, mkdir, open, readFile, realpath, stat, statfs, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
@@ -1567,7 +1567,7 @@ export async function startProvisionerServer() {
   return server;
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   await startProvisionerServer();
 }

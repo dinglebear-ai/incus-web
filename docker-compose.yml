@@ -1,0 +1,23 @@
+services:
+  incus-web:
+    container_name: incus-web
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    ports:
+      - "3090:3090"
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=2048
+      - INCUS_WEB_APP_HOST=0.0.0.0
+      - INCUS_WEB_APP_PORT=3090
+    volumes:
+      - /var/lib/incus/unix.socket:/var/lib/incus/unix.socket
+      - /var/lib/incus-web-app:/var/lib/incus-web-app
+    mem_limit: 2g
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m

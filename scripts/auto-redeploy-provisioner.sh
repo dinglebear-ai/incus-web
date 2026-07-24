@@ -23,8 +23,8 @@ log() {
 # restarting; if one is active, sync files but defer the restart to the
 # next tick rather than dropping it.
 has_active_agent_run() {
-  [[ -f "$AGENT_RUN_STORE_PATH" ]] || return 1
-  AGENT_RUN_STORE_PATH="$AGENT_RUN_STORE_PATH" node --input-type=module -e '
+  sudo test -f "$AGENT_RUN_STORE_PATH" || return 1
+  sudo AGENT_RUN_STORE_PATH="$AGENT_RUN_STORE_PATH" node --input-type=module -e '
 import { DatabaseSync } from "node:sqlite";
 const db = new DatabaseSync(process.env.AGENT_RUN_STORE_PATH);
 const active = db.prepare("SELECT 1 FROM agent_runs WHERE status IN (?, ?) LIMIT 1").get("queued", "running");
@@ -84,7 +84,7 @@ if [[ "$changed" == "1" ]]; then
   sudo touch "$PENDING_RESTART_MARKER"
 fi
 
-if [[ -f "$PENDING_RESTART_MARKER" ]]; then
+if sudo test -f "$PENDING_RESTART_MARKER"; then
   if has_active_agent_run; then
     log "deferring restart: an agent run is currently in progress -- files synced, will retry restart next tick"
   else
