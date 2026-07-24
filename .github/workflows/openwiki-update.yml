@@ -24,7 +24,7 @@ jobs:
           node-version: "22"
 
       - name: Install OpenWiki
-        run: npm install --global openwiki@0.2.0 --ignore-scripts
+        run: npm install --global openwiki@0.2.0
 
       - name: Connect to tailnet
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
