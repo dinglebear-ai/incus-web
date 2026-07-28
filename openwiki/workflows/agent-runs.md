@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Agent Runs"
+description: "Agent runs execute AI coding tasks in ephemeral containers with proper isolation and credential management. The system supports Codex app-server and Claude CLI controllers, cloning a golden container for fast spinup."
+---
+
 # Agent Runs
 
 ## Overview

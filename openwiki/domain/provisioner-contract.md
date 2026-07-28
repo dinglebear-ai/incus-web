@@ -1,3 +1,9 @@
+---
+type: Reference
+title: "Provisioner Contract"
+description: "The provisioner contract defines the boundary between the Next.js control plane and the host provisioner service. It specifies commands, authentication, error handling, and versioning."
+---
+
 # Provisioner Contract
 
 ## Overview

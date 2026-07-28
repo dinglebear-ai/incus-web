@@ -1,3 +1,9 @@
+---
+type: Reference
+title: "Multi-Tenant Control Plane"
+description: "The multi-tenant control plane defines actors, roles, and permissions for workspace access. It ensures users can only access workspaces they own or have been granted access to."
+---
+
 # Multi-Tenant Control Plane
 
 ## Overview

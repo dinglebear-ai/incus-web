@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Backup and Restore"
+description: "Workspace activity/telemetry, build-worker metadata, agent-run history, and provisioner idempotency records use SQLite/WAL. Back up all four stores together with SQLite's online backup API rather than copying the main"
+---
+
 # Backup and Restore
 
 Workspace activity/telemetry, build-worker metadata, agent-run history, and provisioner idempotency records use SQLite/WAL. Back up all four stores together with SQLite's online backup API rather than copying the main database files alone:

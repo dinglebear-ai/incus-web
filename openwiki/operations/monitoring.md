@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Monitoring and alerts"
+description: "Use GET /healthz only for process liveness. Route traffic and page operators from GET /readyz, which checks both durable SQLite state and an authenticated provisioner operation. Prometheus-compatible dependency gauges"
+---
+
 # Monitoring and alerts
 
 Use `GET /healthz` only for process liveness. Route traffic and page operators from `GET /readyz`, which checks both durable SQLite state and an authenticated provisioner operation. Prometheus-compatible dependency gauges are available at `GET /metrics`.

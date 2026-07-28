@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Configuration"
+description: "incus-web uses environment variables for configuration. Secrets are stored in .env files (never committed to git) and system env files."
+---
+
 # Configuration
 
 ## Environment Variables

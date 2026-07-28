@@ -1,3 +1,9 @@
+---
+type: Reference
+title: "Workspace Model"
+description: "A workspace is identified by the full tuple workspace.id, ownerUserId, incusProject, and incusContainer. The control plane resolves the authenticated actor and the host provisioner validates the same tuple before any"
+---
+
 # Workspace Model
 
 A workspace is identified by the full tuple `workspace.id`, `ownerUserId`, `incusProject`, and `incusContainer`. The control plane resolves the authenticated actor and the host provisioner validates the same tuple before any Incus operation.
