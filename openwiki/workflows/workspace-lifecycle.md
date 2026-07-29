@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Workspace Lifecycle"
+description: "Workspaces are Incus containers that provide isolated developer environments with browser-based terminal access. The lifecycle includes creation, startup, setup execution, status monitoring, and destruction."
+---
+
 # Workspace Lifecycle
 
 ## Overview

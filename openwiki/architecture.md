@@ -1,3 +1,9 @@
+---
+type: Reference
+title: "Architecture"
+description: "incus-web creates browser-accessible developer workspaces through a three-tier architecture:"
+---
+
 # Architecture
 
 ## System Overview

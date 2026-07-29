@@ -1,3 +1,9 @@
+---
+type: Documentation Quickstart
+title: "incus-web Quick Start"
+description: "incus-web creates browser-accessible developer workspaces inside Incus system containers. It provides:"
+---
+
 # incus-web Quick Start
 
 ## What is incus-web?

@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Testing"
+description: "Run repository checks from the checkout root:"
+---
+
 # Testing
 
 Run repository checks from the checkout root:

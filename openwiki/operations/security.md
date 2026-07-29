@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Security"
+description: "incus-web implements defense-in-depth with multiple security boundaries: unprivileged containers, network ACLs, provisioner isolation, and OIDC/Tailscale authentication."
+---
+
 # Security
 
 ## Overview

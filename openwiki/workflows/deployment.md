@@ -1,3 +1,9 @@
+---
+type: Playbook
+title: "Deployment"
+description: "incus-web deployment is handled by deploy.sh, which provisions Incus containers, configures networking, installs services, and sets up the control plane. The script is designed to be curlable but does not bake secrets"
+---
+
 # Deployment
 
 ## Overview
