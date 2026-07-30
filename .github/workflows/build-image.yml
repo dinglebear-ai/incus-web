@@ -1,12 +1,14 @@
-name: Build Incus image
+name: CI
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - .github/workflows/build-image.yml
+      - .github/workflows/**
+      - CLAUDE.md
+      - AGENTS.md
+      - GEMINI.md
       - deploy.sh
       - distrobuilder.yaml
       - incus-web-profile.yaml
@@ -17,7 +19,10 @@ on:
       - apps/web/**
   pull_request:
     paths:
-      - .github/workflows/build-image.yml
+      - .github/workflows/**
+      - CLAUDE.md
+      - AGENTS.md
+      - GEMINI.md
       - deploy.sh
       - distrobuilder.yaml
       - incus-web-profile.yaml
@@ -30,208 +35,51 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  contract:
+    uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    with:
+      profile: node
+      implementation-ref: eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+
   web:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    uses: dinglebear-ai/workflows/.github/workflows/fast-node.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    with:
+      node-version: "22"
+      working-directory: apps/web
+      cache-dependency-path: apps/web/package-lock.json
+      install-command: npm ci --no-audit --no-fund
+      audit-command: npm audit --audit-level=high
+      lint-command: npm run lint
+      typecheck-command: ""
+      test-command: npm run test:coverage
+      build-command: npm run build
+      timeout-minutes: 20
 
+  policy:
+    uses: dinglebear-ai/workflows/.github/workflows/fast-ops.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    with:
+      shell-globs: "deploy.sh scripts/**/*.sh tests/**/*.sh"
+      policy-command: >-
+        bash tests/deploy_static_tests.sh &&
+        find scripts -type f -name '*.mjs' -print0 | xargs -0 node --check &&
+        node --test tests/export_onboarding_test.mjs &&
+        node tests/build_worker_smoke.mjs &&
+        node tests/check_markdown_links.mjs
+      timeout-minutes: 15
+
+  gate:
+    name: CI
+    if: always()
+    needs: [contract, web, policy]
+    runs-on: [self-hosted, ci-pool-ops]
+    timeout-minutes: 2
     steps:
-      - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-
-      - name: Install web dependencies
-        run: npm ci --prefix apps/web
-
-      - name: Lint web app
-        run: npm --prefix apps/web run lint
-
-      - name: Test web app
-        run: npm --prefix apps/web run test
-
-      - name: Verify coverage guardrails
-        run: npm --prefix apps/web run test:coverage
-
-      - name: Install Playwright Chromium
-        working-directory: apps/web
-        run: npx playwright install --with-deps chromium
-
-      - name: Browser and accessibility smoke
-        run: npm --prefix apps/web run test:e2e
-
-      - name: Build web app
-        run: npm --prefix apps/web run build
-
-  build-image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-
-      - name: Install validation dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck debootstrap squashfs-tools
-          sudo snap install distrobuilder --classic
-
-      - name: Validate scripts
-        run: |
-          bash tests/deploy_static_tests.sh
-          find scripts tests -type f -name '*.sh' -print0 | xargs -0 bash -n
-          find scripts -type f -name '*.mjs' -print0 | xargs -0 node --check
-          node --test tests/export_onboarding_test.mjs
-          node tests/build_worker_smoke.mjs
-          node tests/check_markdown_links.mjs
-          find scripts tests -type f -name '*.sh' -print0 | xargs -0 shellcheck
-          shellcheck deploy.sh
-
-      - name: Install Incus
-        run: |
-          if ! command -v incus >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y incus uidmap squashfs-tools
-          fi
-          sudo incus admin init --minimal || true
-
-      - name: Build and export image
-        run: |
-          sudo -E ./scripts/build-image.sh
-          sudo chown -R "$(id -u):$(id -g)" "$EXPORT_DIR"
+      - name: Require every fast lane
         env:
-          EXPORT_DIR: ${{ github.workspace }}/dist
-          IMAGE_ALIAS: incus-web-agent
-          DISTROBUILDER_YAML: ${{ github.workspace }}/distrobuilder.yaml
-
-      - name: Smoke test exported image
-        run: sudo -E ./scripts/smoke-image.sh
-        env:
-          EXPORT_DIR: ${{ github.workspace }}/dist
-          IMAGE_ALIAS: incus-web-agent
-          # GitHub-hosted runners do not expose the idmapping support required
-          # for shifted Incus disk mounts. Keep shifted mounts as the runtime
-          # default, but use an unshifted disposable workspace for CI smoke.
-          DISK_SHIFT: "false"
-
-      - name: Exercise prebuilt-image procedural deployment path
-        run: |
-          sudo install -d -m 0777 "$HOST_WORKSPACE"
-          sudo -E ./deploy.sh
-        env:
-          ACCESS_MODE: none
-          INCUS_WEB_ALLOW_NO_ACCESS: "1"
-          CONTAINER_NAME: incus-web-default-path-smoke
-          HOST_WORKSPACE: ${{ runner.temp }}/incus-web-default-path-workspace
-          IMAGE: incus-web-agent-smoke
-          CONTAINER_PACKAGES_PREINSTALLED: "1"
-          VALIDATE_INTERNET_EGRESS: "0"
-          DISK_SHIFT: "false"
-          ENABLE_HOST_PROVISIONER: "0"
-          ENABLE_HOST_WEB_APP: "0"
-          ENABLE_BUILD_WORKER: "0"
-          SETUP_ENABLED: "0"
-
-      - name: Generate image artifact SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
-        with:
-          path: dist
-          format: spdx-json
-          output-file: dist/incus-web-agent.spdx.json
-          upload-artifact: false
-
-      - name: Record source and toolchain provenance
-        run: |
-          jq -n \
-            --arg sourceRepository "$GITHUB_REPOSITORY" \
-            --arg sourceCommit "$GITHUB_SHA" \
-            --arg workflowRun "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --arg definitionSha256 "$(sha256sum distrobuilder.yaml | cut -d' ' -f1)" \
-            --arg nodeVersion "22.17.0" \
-            --arg claudeCodeVersion "2.1.212" \
-            --arg codexVersion "0.144.3" \
-            --arg wettyVersion "3.2.0" \
-            --arg tailscaleVersion "1.98.8" \
-            '{sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,definitionSha256:$definitionSha256,toolchain:{node:$nodeVersion,claudeCode:$claudeCodeVersion,codex:$codexVersion,wetty:$wettyVersion,tailscale:$tailscaleVersion}}' \
-            > dist/BUILD-METADATA.json
-
-      - name: Generate artifact checksums
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          (cd dist && sha256sum -- ./* > SHA256SUMS)
-
-      - name: Upload Incus image artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: incus-web-agent-image
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
-
-  publish-image:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out repository without persisted credentials
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-
-      - name: Download verified image artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: incus-web-agent-image
-          path: dist
-
-      - name: Publish immutable image release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: incus-web-agent-${{ github.sha }}
-          RELEASE_TITLE: incus-web-agent ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          (cd dist && sha256sum -c SHA256SUMS)
-
-          release_notes="$(mktemp)"
-          cat >"$release_notes" <<EOF
-          Rolling Incus image build from \`${GITHUB_SHA}\`.
-
-          - Repository: ${GITHUB_REPOSITORY}
-          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          - Source branch: ${GITHUB_REF_NAME}
-          EOF
-
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" dist/* \
-            --target "$GITHUB_SHA" \
-            --title "$RELEASE_TITLE" \
-            --notes-file "$release_notes"
-
-          latest_ref="tags/incus-web-agent-latest"
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/${latest_ref}" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/${latest_ref}" \
-              -f sha="$GITHUB_SHA" \
-              -F force=true >/dev/null
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/${latest_ref}" \
-              -f sha="$GITHUB_SHA" >/dev/null
-          fi
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: test "$RESULTS" = "success success success"
