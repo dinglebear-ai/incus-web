@@ -41,13 +41,13 @@ concurrency:
 
 jobs:
   contract:
-    uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
     with:
       profile: node
-      implementation-ref: eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+      implementation-ref: 542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
 
   web:
-    uses: dinglebear-ai/workflows/.github/workflows/fast-node.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    uses: dinglebear-ai/workflows/.github/workflows/fast-node.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
     with:
       node-version: "22"
       working-directory: apps/web
@@ -61,7 +61,7 @@ jobs:
       timeout-minutes: 20
 
   policy:
-    uses: dinglebear-ai/workflows/.github/workflows/fast-ops.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267
+    uses: dinglebear-ai/workflows/.github/workflows/fast-ops.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
     with:
       shell-globs: "deploy.sh scripts/**/*.sh tests/**/*.sh"
       policy-command: >-

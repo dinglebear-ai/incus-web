@@ -159,7 +159,7 @@ for needle in \
   "apps/web/**" \
   "docs/contracts/**" \
   "docs/superpowers/**" \
-  "dinglebear-ai/workflows/.github/workflows/fast-node.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267" \
+  "dinglebear-ai/workflows/.github/workflows/fast-node.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec" \
   "working-directory: apps/web" \
   "lint-command: npm run lint" \
   "test-command: npm run test:coverage" \
@@ -612,9 +612,9 @@ for needle in \
   "scripts/**" \
   "tests/**" \
   "bash tests/deploy_static_tests.sh" \
-  "dinglebear-ai/workflows/.github/workflows/fast-node.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267" \
-  "dinglebear-ai/workflows/.github/workflows/fast-ops.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267" \
-  "dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267" \
+  "dinglebear-ai/workflows/.github/workflows/fast-node.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec" \
+  "dinglebear-ai/workflows/.github/workflows/fast-ops.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec" \
+  "dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec" \
   "profile: node" \
   "contents: read"; do
   if ! grep -Fq -- "$needle" "$workflow"; then
@@ -627,8 +627,8 @@ done
 for needle in \
   "name: Release Incus image" \
   "types: [published]" \
-  "dinglebear-ai/workflows/.github/workflows/hosted-incus-image.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267" \
-  "dinglebear-ai/workflows/.github/workflows/github-release.yml@eb5f36cf517ffc949aca1c81e2ccbc71b5a85267" \
+  "dinglebear-ai/workflows/.github/workflows/hosted-incus-image.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec" \
+  "dinglebear-ai/workflows/.github/workflows/github-release.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec" \
   "checkout-ref: \${{ github.event.release.tag_name }}" \
   "shellcheck debootstrap squashfs-tools" \
   "snap install distrobuilder --classic" \
