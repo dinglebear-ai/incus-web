@@ -31,10 +31,7 @@ backups/
 .claude/settings.local.json
 .claude/worktrees/
 .omc/
-.lavra/
 .mnem/
-.beads/
-**/.beads/
 .dolt/
 *.db
 *.db-shm
@@ -104,6 +101,11 @@ config.local.toml
 # Personal local cheatsheet (never commit)
 CLAUDE.md.local
 .worktrees
+
+# Tracked agent configuration and task metadata are repository contracts.
+!.beads/
+!.beads/**
+.lavra/
 
 # Local binary artifacts
 plugins/bitwarden/bin/
