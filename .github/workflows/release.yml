@@ -1,0 +1,110 @@
+name: Release Incus image
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: incus-web-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    permissions:
+      contents: read
+    uses: dinglebear-ai/workflows/.github/workflows/hosted-incus-image.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    with:
+      checkout-ref: ${{ github.event.release.tag_name }}
+      setup-command: |
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends shellcheck debootstrap squashfs-tools incus uidmap jq
+        sudo snap install distrobuilder --classic
+        sudo incus admin init --minimal || true
+      validate-command: |
+        npm ci --prefix apps/web --no-audit --no-fund
+        npm --prefix apps/web run lint
+        npm --prefix apps/web run test:coverage
+        npm --prefix apps/web run build
+        (cd apps/web && npx playwright install --with-deps chromium)
+        npm --prefix apps/web run test:e2e
+        bash tests/deploy_static_tests.sh
+        find scripts tests -type f -name '*.sh' -print0 | xargs -0 bash -n
+        find scripts -type f -name '*.mjs' -print0 | xargs -0 node --check
+        node --test tests/export_onboarding_test.mjs
+        node tests/build_worker_smoke.mjs
+        node tests/check_markdown_links.mjs
+        find scripts tests -type f -name '*.sh' -print0 | xargs -0 shellcheck
+        shellcheck deploy.sh
+      build-command: |
+        export EXPORT_DIR="${GITHUB_WORKSPACE}/dist"
+        export IMAGE_ALIAS=incus-web-agent
+        export DISTROBUILDER_YAML="${GITHUB_WORKSPACE}/distrobuilder.yaml"
+        sudo -E ./scripts/build-image.sh
+        sudo chown -R "$(id -u):$(id -g)" "$EXPORT_DIR"
+        jq -n \
+          --arg sourceRepository "$GITHUB_REPOSITORY" \
+          --arg sourceCommit "$GITHUB_SHA" \
+          --arg workflowRun "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+          --arg definitionSha256 "$(sha256sum distrobuilder.yaml | cut -d' ' -f1)" \
+          --arg nodeVersion "22.17.0" \
+          --arg claudeCodeVersion "2.1.212" \
+          --arg codexVersion "0.144.3" \
+          --arg wettyVersion "3.2.0" \
+          --arg tailscaleVersion "1.98.8" \
+          '{sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,definitionSha256:$definitionSha256,toolchain:{node:$nodeVersion,claudeCode:$claudeCodeVersion,codex:$codexVersion,wetty:$wettyVersion,tailscale:$tailscaleVersion}}' \
+          > dist/BUILD-METADATA.json
+      smoke-command: |
+        export EXPORT_DIR="${GITHUB_WORKSPACE}/dist"
+        export IMAGE_ALIAS=incus-web-agent
+        export DISK_SHIFT=false
+        sudo -E ./scripts/smoke-image.sh
+        export ACCESS_MODE=none
+        export INCUS_WEB_ALLOW_NO_ACCESS=1
+        export CONTAINER_NAME=incus-web-default-path-smoke
+        export HOST_WORKSPACE="${RUNNER_TEMP}/incus-web-default-path-workspace"
+        export IMAGE=incus-web-agent-smoke
+        export CONTAINER_PACKAGES_PREINSTALLED=1
+        export VALIDATE_INTERNET_EGRESS=0
+        export ENABLE_HOST_PROVISIONER=0
+        export ENABLE_HOST_WEB_APP=0
+        export ENABLE_BUILD_WORKER=0
+        export SETUP_ENABLED=0
+        sudo install -d -m 0777 "$HOST_WORKSPACE"
+        sudo -E ./deploy.sh
+      artifact-name: incus-web-agent-image
+      artifact-directory: dist
+      timeout-minutes: 120
+
+  prepare-publication:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: incus-web-agent-image
+          path: release-artifacts
+      - name: Preserve builder checksum without colliding with release inventory
+        run: mv release-artifacts/SHA256SUMS release-artifacts/BUILDER-SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: incus-web-agent-release
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: prepare-publication
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    uses: dinglebear-ai/workflows/.github/workflows/github-release.yml@542ea7b7e5ca2d4e21f3277bfcf158584fee90ec
+    with:
+      release-tag: ${{ github.event.release.tag_name }}
+      artifact-pattern: incus-web-agent-release
+      artifact-path: release-artifacts
