@@ -1,3 +1,9 @@
+---
+title: Multi-Tenant Control Plane Contract v1
+created: 2026-06-29
+updated: 2026-07-30
+---
+
 # Multi-Tenant Control Plane Contract v1
 
 Date: 2026-06-29
