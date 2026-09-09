@@ -1,4 +1,5 @@
 # Beads Configuration File
+no-git-ops: false
 # This file configures default behavior for all bd commands in this repository
 # All settings can also be set via environment variables (BD_* prefix)
 # or overridden with command-line flags
