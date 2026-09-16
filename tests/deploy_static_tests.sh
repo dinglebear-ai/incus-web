@@ -11,6 +11,7 @@ container_provision="$root/scripts/container-provision.sh"
 info_script="$root/scripts/incus-web-info.sh"
 smoke_image="$root/scripts/smoke-image.sh"
 workflow="$root/.github/workflows/build-image.yml"
+release_workflow="$root/.github/workflows/release.yml"
 backup_state="$root/scripts/backup-state.sh"
 contract_doc="$root/docs/contracts/provisioner-boundary-v1.md"
 provisioner_plan="$root/docs/superpowers/plans/2026-07-01-provisioner-boundary-v1.md"
@@ -158,10 +159,11 @@ for needle in \
   "apps/web/**" \
   "docs/contracts/**" \
   "docs/superpowers/**" \
-  "npm ci --prefix apps/web" \
-  "npm --prefix apps/web run lint" \
-  "npm --prefix apps/web run test" \
-  "npm --prefix apps/web run build"; do
+  "dinglebear-ai/workflows/.github/workflows/fast-node.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d" \
+  "working-directory: apps/web" \
+  "lint-command: npm run lint" \
+  "test-command: npm run test:coverage" \
+  "build-command: npm run build"; do
   if ! grep -Fq -- "$needle" "$workflow"; then
     printf 'missing expected web CI content: %s\n' "$needle" >&2
     exit 1
@@ -597,16 +599,37 @@ if [[ ! -f "$workflow" ]]; then
   printf 'missing CI image workflow: %s\n' "$workflow" >&2
   exit 1
 fi
+if [[ ! -f "$release_workflow" ]]; then
+  printf 'missing release image workflow: %s\n' "$release_workflow" >&2
+  exit 1
+fi
 
 # shellcheck disable=SC2016
 for needle in \
-  "name: Build Incus image" \
+  "name: CI" \
   "pull_request:" \
-  "runs-on: ubuntu-latest" \
   "distrobuilder.yaml" \
   "scripts/**" \
   "tests/**" \
   "bash tests/deploy_static_tests.sh" \
+  "dinglebear-ai/workflows/.github/workflows/fast-node.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d" \
+  "dinglebear-ai/workflows/.github/workflows/fast-ops.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d" \
+  "dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d" \
+  "profile: node" \
+  "contents: read"; do
+  if ! grep -Fq -- "$needle" "$workflow"; then
+    printf 'missing expected workflow content: %s\n' "$needle" >&2
+    exit 1
+  fi
+done
+
+# shellcheck disable=SC2016
+for needle in \
+  "name: Release Incus image" \
+  "types: [published]" \
+  "dinglebear-ai/workflows/.github/workflows/hosted-incus-image.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d" \
+  "dinglebear-ai/workflows/.github/workflows/github-release.yml@66e64b9f31de7ac1f9aa8c9f87ede9bbec5eae1d" \
+  "checkout-ref: \${{ github.event.release.tag_name }}" \
   "shellcheck debootstrap squashfs-tools" \
   "snap install distrobuilder --classic" \
   "sudo incus admin init --minimal" \
@@ -615,21 +638,11 @@ for needle in \
   "permissions:" \
   "contents: read" \
   "contents: write" \
-  "persist-credentials: false" \
-  "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" \
-  "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" \
   "retention-days: 14" \
-  "Publish immutable image release" \
   'sudo chown -R "$(id -u):$(id -g)" "$EXPORT_DIR"' \
-  'RELEASE_TAG: incus-web-agent-${{ github.sha }}' \
-  'latest_ref="tags/incus-web-agent-latest"' \
-  'gh api --method PATCH' \
-  '-F force=true' \
-  'gh api --method POST' \
-  'gh release create "$RELEASE_TAG" dist/*' \
   "incus-web-agent-image"; do
-  if ! grep -Fq -- "$needle" "$workflow"; then
-    printf 'missing expected workflow content: %s\n' "$needle" >&2
+  if ! grep -Fq -- "$needle" "$release_workflow"; then
+    printf 'missing expected release workflow content: %s\n' "$needle" >&2
     exit 1
   fi
 done

@@ -107,7 +107,6 @@ actions:
         node_arch="$(dpkg --print-architecture)"
         case "$node_arch" in
           amd64) node_arch="x64" ;;
-          arm64) node_arch="arm64" ;;
           *) echo "unsupported Node architecture: $node_arch" >&2; exit 1 ;;
         esac
         node_version="22.17.0"
@@ -140,7 +139,6 @@ actions:
       tailscale_arch="$(dpkg --print-architecture)"
       case "$tailscale_arch" in
         amd64) tailscale_sha256="3a55b5900dd7e11e09b6c74d1e46d223d549dfbefbdc1f044a8ab7bdbafb933c" ;;
-        arm64) tailscale_sha256="53eb3ce89d062fd34e393d24a6c8ec08c769fede8eb77fe9c6e347ad4ae00f84" ;;
         *) echo "unsupported Tailscale architecture: $tailscale_arch" >&2; exit 1 ;;
       esac
       tailscale_archive="tailscale_${tailscale_version}_${tailscale_arch}.tgz"
