@@ -1,3 +1,9 @@
+---
+title: Provisioner Boundary Contract v1
+created: 2026-07-01
+updated: 2026-07-30
+---
+
 # Provisioner Boundary Contract v1
 
 Date: 2026-07-01

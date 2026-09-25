@@ -1677,7 +1677,6 @@ version="1.98.8"
 arch="$(dpkg --print-architecture)"
 case "$arch" in
   amd64) sha256=3a55b5900dd7e11e09b6c74d1e46d223d549dfbefbdc1f044a8ab7bdbafb933c ;;
-  arm64) sha256=53eb3ce89d062fd34e393d24a6c8ec08c769fede8eb77fe9c6e347ad4ae00f84 ;;
   *) echo "unsupported Tailscale architecture: $arch" >&2; exit 1 ;;
 esac
 if ! command -v tailscale >/dev/null 2>&1 || ! tailscale version | head -1 | grep -Fxq "$version"; then
@@ -1711,7 +1710,6 @@ version='$OAUTH2_PROXY_VERSION'
 arch=\"\$(uname -m)\"
 case \"\$arch\" in
   x86_64|amd64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
   *) echo \"unsupported oauth2-proxy architecture: \$arch\" >&2; exit 1 ;;
 esac
 if command -v oauth2-proxy >/dev/null 2>&1 && oauth2-proxy --version 2>&1 | grep -Fq \"\$version\"; then

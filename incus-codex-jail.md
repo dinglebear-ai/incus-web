@@ -736,7 +736,7 @@ config:
 
           qarch="$(dpkg --print-architecture)"
           case "$qarch" in
-            amd64|arm64) ;;
+            amd64) ;;
             *) echo "Unsupported Debian arch: $qarch" >&2; exit 1 ;;
           esac
 
@@ -801,7 +801,6 @@ config:
           ARCH=\"$(uname -m)\";
           case \"$ARCH\" in
             x86_64) GOARCH=amd64 ;;
-            aarch64|arm64) GOARCH=arm64 ;;
             *) echo \"Unsupported arch: $ARCH\" >&2; exit 1 ;;
           esac;
           URL=\"https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz\";
@@ -1761,7 +1760,7 @@ config:
 
           qarch="$(dpkg --print-architecture)"
           case "$qarch" in
-            amd64|arm64) ;;
+            amd64) ;;
             *) echo "Unsupported Debian arch: $qarch" >&2; exit 1 ;;
           esac
 
@@ -1901,7 +1900,6 @@ config:
           ARCH=\"$(uname -m)\";
           case \"$ARCH\" in
             x86_64) GOARCH=amd64 ;;
-            aarch64|arm64) GOARCH=arm64 ;;
             *) echo \"Unsupported arch: $ARCH\" >&2; exit 1 ;;
           esac;
           URL=\"https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz\";
