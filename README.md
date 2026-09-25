@@ -305,3 +305,7 @@ Configure the OIDC app callback as `https://incus-web.example.com/oauth2/callbac
 - In OIDC mode, `oauth2-proxy` is the only service intended to be exposed; WeTTY stays bound to `127.0.0.1` inside the container.
 - Do not build an Incus image with `/var/lib/tailscale` already populated. Cloned containers should join Tailscale with their own node identity.
 - The default profile is nested but unprivileged. Keep privileged containers out of the hosted multi-tenant path; use a dedicated trusted pool or an Incus VM for workloads that truly require privileged semantics.
+
+## License
+
+Original Dinglebear-authored portions of this project are licensed under [AGPL-3.0-only](LICENSE). Separate commercial licensing is available for organizations that need terms outside the AGPL. Third-party material remains under its original license. See [LICENSING.md](LICENSING.md).
