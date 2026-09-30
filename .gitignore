@@ -112,3 +112,4 @@ plugins/bitwarden/bin/
 dist/
 *.squashfs
 *.tar.xz
+worktrees/
